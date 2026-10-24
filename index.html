@@ -64,6 +64,30 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .prices>div{padding:7px 4px;text-align:center}
 .prices .h{font:700 15px var(--display);letter-spacing:.08em}
 .prices .p{background:var(--panel);font-size:17px;padding:9px 4px}
+.target{font-size:12px;font-weight:600;opacity:.85;font-family:var(--mono)}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
+.tiles>div{padding:9px 6px;text-align:center;min-width:0}
+.tiles>div+div{border-left:1px solid var(--line)}
+.tiles .k{font:700 13px var(--display);letter-spacing:.1em;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tiles .v{font:700 22px/1.15 var(--display)}
+.tiles .d{font-size:12px;font-weight:700}
+.range{margin-top:10px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.range .bar{position:relative;height:10px;margin:6px 0 4px}
+.range .track{position:absolute;inset:4px 0;height:2px;background:var(--line)}
+.range .fill{position:absolute;top:0;height:10px;border-radius:99px;background:var(--blue);opacity:.85}
+.range .mark{position:absolute;top:-5px;width:3px;height:20px;border-radius:2px;background:var(--buy)}
+.sellbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;background:rgba(34,197,94,.08);border-top:1px solid var(--line)}
+.sellbar .amt{font:700 22px var(--display);color:var(--buy)}
+.sellbar .src{border:1px solid var(--line);border-radius:6px;padding:1px 7px;font:700 14px var(--display);color:var(--accent)}
+.offcols{display:grid;grid-template-columns:repeat(3,1fr);background:var(--panel);max-height:300px;overflow-y:auto}
+.offcol{min-width:0}
+.offcol+.offcol{border-left:1px solid var(--line)}
+.oc{display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 4px;border-top:1px solid var(--line);margin:0 4px}
+.oc:first-child{border-top:0}
+.oc .pr{font:600 18px var(--display);font-variant-numeric:tabular-nums}
+.oc.sell{border:2px solid var(--buy);border-radius:9px;color:var(--buy)}
+.cc{font:700 11px var(--display);letter-spacing:.06em;background:var(--panel2);color:var(--muted);border-radius:5px;padding:2px 5px}
+.cc.fbm{opacity:.8}
 .offers{margin-top:10px;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
 .offtabs{display:grid;grid-template-columns:repeat(3,1fr)}
 .offtabs button{padding:9px 4px;font:700 16px var(--display);letter-spacing:.08em;color:#111;opacity:.55}
@@ -218,7 +242,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const money = v => v==null || isNaN(v) ? "—" : (v<0?"-$":"$") + Math.abs(v).toFixed(2);
 const kfmt = n => n==null || n<0 ? "—" : n>=1e6 ? (n/1e6).toFixed(n>=1e7?0:1)+"M" : n>=1e3 ? Math.round(n/1e3)+"K" : String(n);
-const cents = v => v==null || v<0 ? null : v/100;
+const cents = v => v==null || v<=0 ? null : v/100;
 const keepaToMs = t => (t + 21564000) * 60000;
 function toast(msg){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),1800); }
 
@@ -329,28 +353,66 @@ async function loadOffers(){
     if (current === mine){ current.calc = calc(current.product, current.cost); renderScan(); }
   }
 }
+const SHORT = {1:"N",2:"LN",3:"VG",4:"G",5:"A"};
+const short = c => SHORT[c] || "C";
 function offersHTML(){
-  const pr = current.calc.pr, o = current.offers;
+  const c = current.calc, pr = c.pr, o = current.offers;
   const usedL = o ? o.filter(x => x.used) : null, newL = o ? o.filter(x => x.isNew) : null;
-  const fbaL = o ? o.filter(x => x.fba && (S.cond === "used" ? x.used : x.isNew)) : null;
+  const fbaL = o ? o.filter(x => x.fba) : null;
+  const want = x => S.cond === "used" ? x.used : x.isNew;
+  const sellOffer = fbaL ? fbaL.find(want) : null;
   const counts = {used: usedL ? usedL.length : pr.countUsed, new: newL ? newL.length : pr.countNew, fba: fbaL ? fbaL.length : "?"};
-  if (!offTab) offTab = S.cond === "used" ? "used" : "new";
-  const list = {used:usedL, new:newL, fba:fbaL}[offTab];
-  const tabBtn = (k, label, color) => `<button data-off="${k}" style="background:${color}" aria-pressed="${offTab===k}">${label} (${counts[k]})</button>`;
+  const head = `<div class="offtabs">
+    <button style="background:#b8c0c8" aria-pressed="true">USED (${counts.used})</button>
+    <button style="background:var(--blue)" aria-pressed="true">NEW (${counts.new})</button>
+    <button style="background:var(--accent)" aria-pressed="true">FBA (${counts.fba})</button></div>`;
+  const sellbar = `<div class="sellbar"><span class="amt num">${money(c.sell)}</span><span class="note">sell price</span>
+    ${sellOffer ? `<span class="src">FBA ${sellOffer.total.toFixed(2)} · ${short(sellOffer.cond)}</span>` : `<span class="src">${esc(c.sellSrc).toUpperCase()}</span>`}
+    <span class="note" style="margin-left:auto">${o ? "live offers" : "from Keepa stats"}</span></div>`;
   let body;
   if (current.offersLoading) body = `<div class="empty" style="padding:16px">Loading live offers…</div>`;
   else if (current.offersErr) body = `<div class="err" style="margin:8px">${esc(current.offersErr)}</div>`;
   else if (!o) body = `<div class="empty" style="padding:14px"><button class="btn pri" id="loadOff" style="width:100%">Load live offers (≈12 tokens)</button></div>`;
-  else if (!list.length) body = `<div class="empty" style="padding:16px">No ${offTab === "fba" ? "FBA " + S.cond : offTab} offers right now</div>`;
-  else body = list.map(x => `<div class="offrow">
-      <span class="pr num">${money(x.total)}</span>
-      <span style="min-width:0">${esc(x.condLabel)}${x.ship ? ` <span class="note">(${money(x.price)} + ${money(x.ship)} ship)</span>` : ""}</span>
-      <span>${x.amazon ? '<span class="badge fba">AMZ</span>' : x.fba ? '<span class="badge fba">FBA</span>' : '<span class="badge">FBM</span>'}</span>
-    </div>`).join("");
-  return `<div class="offhead"><span class="label grow" style="flex:1">Compare offers</span>${o ? '<button class="mini" id="loadOff">Refresh</button>' : ""}</div>
-  <div class="offers">
-    <div class="offtabs">${tabBtn("used","USED","#b8c0c8")}${tabBtn("new","NEW","var(--blue)")}${tabBtn("fba","FBA","var(--accent)")}</div>
-    <div class="offlist">${body}</div>
+  else {
+    const cell = (x, isSell) => `<div class="oc${isSell ? " sell" : ""}"><span class="pr">${x.total.toFixed(2)}</span><span class="cc${x.fba || x.amazon ? "" : " fbm"}">${short(x.cond)}</span></div>`;
+    const col = (list, mark) => `<div class="offcol">${list.length ? list.slice(0,10).map(x => cell(x, mark && x === sellOffer)).join("") : '<div class="oc note">none</div>'}</div>`;
+    body = `<div class="offcols">${col(usedL,false)}${col(newL,false)}${col(fbaL,true)}</div>`;
+  }
+  return `<div class="offhead"><span class="label" style="flex:1">Compare offers</span>${o ? '<button class="mini" id="loadOff">Refresh</button>' : ""}</div>
+  <div class="offers">${head}${sellbar}${body}</div>`;
+}
+function rangeHTML(){
+  // 12-month price range from Keepa history (listing prices, not confirmed sales)
+  const p = current.product, idx = S.cond === "used" ? 2 : 1;
+  const a = p.csv && p.csv[idx]; if (!a || a.length < 4) return "";
+  const since = Date.now() - 365*864e5, vals = [];
+  for (let i = 0; i+1 < a.length; i += 2){ if (keepaToMs(a[i]) >= since && a[i+1] > 0) vals.push(a[i+1]/100); }
+  if (vals.length < 3) return "";
+  vals.sort((x,y) => x-y);
+  const q = f => vals[Math.min(vals.length-1, Math.floor(f*(vals.length-1)))];
+  const lo = q(.1), hi = q(.9), med = q(.5), mn = vals[0], mx = vals[vals.length-1];
+  const sell = current.calc.sell;
+  const top = Math.max(mx, sell||0), span = (top - mn) || 1;
+  const pct = v => Math.max(0, Math.min(100, (v - mn)/span*100));
+  return `<div class="range">
+    <div class="row"><span class="num" style="font-weight:700">${money(mn)}</span><div class="bar grow">
+      <div class="track"></div>
+      <div class="fill" style="left:${pct(lo)}%;width:${Math.max(2,pct(hi)-pct(lo))}%"></div>
+      ${sell ? `<div class="mark" style="left:calc(${pct(sell)}% - 1px)"></div>` : ""}
+    </div><span class="num" style="font-weight:700">${money(mx)}</span>${sell ? `<span class="num" style="font-weight:700;color:var(--buy)">${money(sell)}</span>` : ""}</div>
+    <div class="note">${S.cond} price range · 12m · ${vals.length} price changes · median ${money(med)}</div>
+  </div>`;
+}
+function tilesHTML(){
+  const pr = current.calc.pr;
+  const delta = (now, avg) => (now != null && avg != null && Math.abs(now-avg) >= .01)
+    ? `<div class="d" style="color:${now < avg ? "var(--skip)" : "var(--buy)"}">${now < avg ? "▼" : "▲"} ${money(Math.abs(now-avg))}</div>` : "";
+  const tile = (k, v, color, d="") => `<div><div class="k">${k}</div><div class="v num" style="color:${color}">${money(v)}</div>${d}</div>`;
+  return `<div class="tiles">
+    ${tile("USED BB", pr.usedBB, "var(--fg)", delta(pr.usedBB, pr.avgUsedBB))}
+    ${tile("NEW BB", pr.newBB, "var(--blue)", delta(pr.newBB, pr.avgNewBB))}
+    ${tile("HIST. USED", pr.histUsed, "var(--muted)")}
+    ${tile("HIST. NEW", pr.histNew, "var(--blue)")}
   </div>`;
 }
 function pick(p){ current.product = p; current.matches = []; current.offers = null; current.offersErr = null; current.calc = calc(p, current.cost); renderScan(); }
@@ -367,7 +429,11 @@ function readPrices(p){
     rank: c[3] != null && c[3] > 0 ? c[3] : null,
     avgRank: p.stats && p.stats.avg180 && p.stats.avg180[3] > 0 ? p.stats.avg180[3] : null,
     pulse: p.stats ? Math.max(0, p.stats.salesRankDrops180 ?? 0) : 0,
-    countNew: c[11] > 0 ? c[11] : 0, countUsed: c[12] > 0 ? c[12] : 0
+    countNew: c[11] > 0 ? c[11] : 0, countUsed: c[12] > 0 ? c[12] : 0,
+    histUsed: p.stats && p.stats.avg180 ? cents(p.stats.avg180[2]) : null,
+    histNew:  p.stats && p.stats.avg180 ? cents(p.stats.avg180[1]) : null,
+    avgUsedBB: p.stats && p.stats.avg180 ? cents(p.stats.avg180[32]) : null,
+    avgNewBB:  p.stats && p.stats.avg180 ? cents(p.stats.avg180[18]) : null
   };
 }
 function calc(p, cost){
@@ -406,6 +472,7 @@ function trigDecide(res){
     if (inRank && inPulse){
       res.trigger = t.name;
       if (t.color === "red"){ res.why = t.name; return res; }
+      res.target = t.minProfit;
       if (res.profit >= t.minProfit){ res.buy = true; res.why = t.name; return res; }
     }
   }
@@ -428,7 +495,7 @@ function evDecide(res){
   res.trigger = row.label;
   if (row.keep == null){ res.why = "Pass: " + row.label.toLowerCase(); return res; }
   const expected = res.profit * row.pct/100;
-  res.expected = expected;
+  res.expected = expected; res.target = row.keep;
   res.buy = expected >= row.keep;
   res.why = (res.buy ? "" : "Low: ") + "EV " + money(expected);
   return res;
@@ -492,24 +559,19 @@ function renderScanInner(err){
 function resultHTML(){
   const p = current.product, c = current.calc, pr = c.pr;
   const cls = c.profit == null ? "" : c.buy ? "buy" : "skip";
-  const off = S.cond === "used"
-    ? [["USED", pr.usedLow, "#9aa3ad"], ["USED BB", pr.usedBB, "var(--teal)"], ["LIKE NEW", pr.usedLN, "var(--accent)"]]
-    : [["NEW", pr.newLow, "#9aa3ad"], ["NEW BB", pr.newBB, "var(--blue)"], ["AMAZON", pr.amazon, "var(--accent)"]];
   const sc = encodeURIComponent(String(p.title||"").slice(0,80));
   return `
   <div class="verdict ${cls}">
     <div><span class="big num">${money(c.profit)}</span><span class="label">FBA profit</span></div>
-    <div><span class="vword">${c.profit==null ? "—" : c.buy ? "BUY" : "SKIP"}</span><span class="why">${esc(c.why)}</span></div>
+    <div><span class="vword">${c.profit==null ? "—" : c.buy ? "BUY" : "SKIP"}</span><span class="why">${c.buy ? "✓ " : ""}${esc(c.why)}</span>${c.target != null && c.profit != null ? `<span class="target">Target ${money(c.target)} · ${(S.mode==="ev" ? c.expected : c.profit) - c.target >= 0 ? "+" : "−"}${money(Math.abs((S.mode==="ev" ? c.expected : c.profit) - c.target)).replace("-","")}</span>` : ""}</div>
     <div><input class="costin num" id="cost" inputmode="decimal" value="${(Number(current.cost)||0).toFixed(2)}" aria-label="Buy cost"><span class="label">Buy cost</span></div>
   </div>
-  <div class="stats">
-    <div><div class="v num">${kfmt(pr.rank)}</div><small>Rank · ${kfmt(pr.avgRank)} avg 6m</small></div>
-    <div><div class="v num">${pr.pulse}</div><small>Sales pulse 6m</small></div>
-    <div><div class="v num">${money(c.sell)}</div><small>Sell · ${esc(c.sellSrc)}</small></div>
+  <div class="stats" style="grid-template-columns:1fr 1fr">
+    <div><div class="v num">${kfmt(pr.rank)}</div><small>RANK · ${kfmt(pr.avgRank)} avg 6m</small></div>
+    <div><div class="v num">${pr.pulse}</div><small>SALES PULSE 6M</small></div>
   </div>
-  <div class="prices">
-    ${off.map(o => `<div style="padding:0"><div class="h" style="background:${o[2]};color:#111">${o[0]}</div><div class="p num">${money(o[1])}</div></div>`).join("")}
-  </div>
+  ${rangeHTML()}
+  ${tilesHTML()}
   ${offersHTML()}
   <div class="note" style="margin-top:6px">Fees ${money(c.fees)} = ${Math.round(c.refPct*100)}% referral${c.closing?" + $1.80 closing":""} + ${money(c.fbaFee)} FBA + ${money(c.lbs*S.inbound)} inbound${S.prep?" + prep":""} · offers: ${pr.countUsed} used / ${pr.countNew} new</div>
   <div class="links">
