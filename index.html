@@ -91,7 +91,7 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 /* camera overlay */
 .cam-wrap{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column}
 .cam-wrap video{flex:1;width:100%;object-fit:cover;min-height:0}
-.reticle{position:absolute;left:10%;right:10%;top:40%;height:20%;border:3px solid var(--accent);border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.35)}
+.reticle{position:absolute;left:10%;right:10%;top:32.5%;height:35%;border:3px solid var(--accent);border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.35)}
 .cam-bar{display:flex;justify-content:space-between;align-items:center;padding:14px max(16px,env(safe-area-inset-left,0px)) calc(14px + env(safe-area-inset-bottom,0px));background:#000;color:#fff}
 
 /* chart sheet */
@@ -146,9 +146,9 @@ table.ev small{color:var(--muted);display:block}
 </div>
 
 <div class="cam-wrap" id="cam" hidden>
-  <video id="video" playsinline muted></video>
+  <video id="video" autoplay playsinline muted></video>
   <div class="reticle"></div>
-  <div class="cam-bar"><span>Point at the barcode</span><button class="btn" id="camClose">Close</button></div>
+  <div class="cam-bar"><span id="camHint">Point at the barcode</span><button class="btn" id="camClose">Close</button></div>
 </div>
 
 <div class="sheet" id="sheet" hidden></div>
@@ -421,31 +421,97 @@ function wireScan(){
 }
 
 /* ============ camera ============ */
-let reader = null;
-async function openCam(){
-  if (!window.ZXing){ toast("Scanner library didn't load"); return; }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Live camera needs https. Use the photo option."); return; }
-  $("#cam").hidden = false;
-  const hints = new Map();
-  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.CODE_128]);
-  reader = new ZXing.BrowserMultiFormatReader(hints, 250);
-  try{
-    await reader.decodeFromConstraints({video:{facingMode:"environment"}}, "video", (res) => {
-      if (res){ closeCam(); lookup(res.getText()); }
-    });
-  }catch(e){ closeCam(); toast("Camera blocked. Allow camera access for this site."); }
+// Own decode loop: high-res stream, crop the center band to a canvas, decode with ZXing.
+// Uses the native BarcodeDetector when the browser has one (faster), ZXing otherwise.
+const FORMATS = () => [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.CODE_128];
+let stream = null, camTimer = null, zx = null, native = null;
+function makeZx(){
+  const r = new ZXing.MultiFormatReader();
+  const h = new Map();
+  h.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, FORMATS());
+  h.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  r.setHints(h);
+  return r;
 }
-function closeCam(){ if (reader){ try{ reader.reset(); }catch(e){} reader=null; } $("#cam").hidden = true; }
+function decodeCanvas(cv){
+  if (!zx) zx = makeZx();
+  const src = new ZXing.HTMLCanvasElementLuminanceSource(cv);
+  for (const bmp of [new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(src)), new ZXing.BinaryBitmap(new ZXing.GlobalHistogramBinarizer(src))]){
+    try { return zx.decodeWithState(bmp).getText(); } catch(e) { zx.reset(); }
+  }
+  return null;
+}
+async function openCam(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Live camera needs https. Use the photo option."); return; }
+  if (!window.ZXing && !("BarcodeDetector" in window)){ toast("Scanner library didn't load. Reload the page."); return; }
+  if ("BarcodeDetector" in window){
+    try { native = new BarcodeDetector({formats:["ean_13","upc_a","ean_8","upc_e","code_128"]}); } catch(e){ native = null; }
+  }
+  const video = $("#video");
+  video.setAttribute("autoplay",""); video.setAttribute("playsinline",""); video.muted = true;
+  $("#cam").hidden = false;
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}}});
+  }catch(e){ closeCam(); toast("Camera blocked. Settings > Safari > Camera > Allow."); return; }
+  video.srcObject = stream;
+  try { await video.play(); } catch(e){}
+  try { const tr = stream.getVideoTracks()[0]; const caps = tr.getCapabilities ? tr.getCapabilities() : {};
+        if (caps.focusMode && caps.focusMode.includes("continuous")) await tr.applyConstraints({advanced:[{focusMode:"continuous"}]}); } catch(e){}
+  const cv = document.createElement("canvas"), g = cv.getContext("2d", {willReadFrequently:true});
+  let busyFrame = false, n = 0;
+  const tick = async () => {
+    if (!stream) return;
+    if (!busyFrame && video.readyState >= 2 && video.videoWidth){
+      busyFrame = true;
+      const vw = video.videoWidth, vh = video.videoHeight;
+      // center band: 80% wide, 35% tall (barcodes are wide)
+      const cw = Math.round(vw*0.8), ch = Math.round(vh*0.35), cx = Math.round((vw-cw)/2), cy = Math.round((vh-ch)/2);
+      const scale = Math.min(1, 1280/cw);
+      cv.width = Math.round(cw*scale); cv.height = Math.round(ch*scale);
+      g.drawImage(video, cx, cy, cw, ch, 0, 0, cv.width, cv.height);
+      let code = null;
+      try{
+        if (native){ const r = await native.detect(cv); if (r && r.length) code = r[0].rawValue; }
+        else if (window.ZXing) code = decodeCanvas(cv);
+      }catch(e){}
+      busyFrame = false;
+      if (code){ closeCam(); if (navigator.vibrate) navigator.vibrate(40); lookup(code); return; }
+      if (++n === 40) $("#camHint").textContent = "Hold steady, fill the box with the barcode, avoid glare";
+    }
+    camTimer = setTimeout(tick, 120);
+  };
+  tick();
+}
+function closeCam(){
+  clearTimeout(camTimer); camTimer = null;
+  if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+  const v = $("#video"); v.srcObject = null;
+  $("#camHint").textContent = "Point at the barcode";
+  $("#cam").hidden = true;
+}
 $("#camClose").onclick = closeCam;
 async function photoScan(e){
-  const file = e.target.files[0]; if (!file) return;
-  const url = URL.createObjectURL(file);
+  const file = e.target.files[0]; e.target.value = ""; if (!file) return;
   try{
-    const r = new ZXing.BrowserMultiFormatReader();
-    const res = await r.decodeFromImageUrl(url);
-    lookup(res.getText());
-  }catch(err){ renderScan("Couldn't read a barcode in that photo. Get closer and keep it sharp."); }
-  finally{ URL.revokeObjectURL(url); }
+    const bmp = await createImageBitmap(file);
+    const cv = document.createElement("canvas"), g = cv.getContext("2d", {willReadFrequently:true});
+    let code = null;
+    // try a few sizes and both orientations; phone photos are huge and often sideways
+    for (const max of [1600, 1000, 2400]){
+      for (const rot of [0, 90]){
+        const s = Math.min(1, max/Math.max(bmp.width,bmp.height));
+        const w = Math.round(bmp.width*s), h = Math.round(bmp.height*s);
+        if (rot){ cv.width = h; cv.height = w; g.save(); g.translate(h,0); g.rotate(Math.PI/2); g.drawImage(bmp,0,0,w,h); g.restore(); }
+        else { cv.width = w; cv.height = h; g.drawImage(bmp,0,0,w,h); }
+        if ("BarcodeDetector" in window){ try{ const r = await new BarcodeDetector().detect(cv); if (r.length) code = r[0].rawValue; }catch(err){} }
+        if (!code && window.ZXing) code = decodeCanvas(cv);
+        if (code) break;
+      }
+      if (code) break;
+    }
+    if (code) lookup(code);
+    else renderScan("Couldn't read a barcode in that photo. Fill the frame with it and keep it sharp, or type the number.");
+  }catch(err){ renderScan("Couldn't open that photo. Try again or type the number."); }
 }
 
 /* ============ chart ============ */
