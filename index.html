@@ -64,6 +64,17 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .prices>div{padding:7px 4px;text-align:center}
 .prices .h{font:700 15px var(--display);letter-spacing:.08em}
 .prices .p{background:var(--panel);font-size:17px;padding:9px 4px}
+.offers{margin-top:10px;border-radius:10px;overflow:hidden;border:1px solid var(--line)}
+.offtabs{display:grid;grid-template-columns:repeat(3,1fr)}
+.offtabs button{padding:9px 4px;font:700 16px var(--display);letter-spacing:.08em;color:#111;opacity:.55}
+.offtabs button[aria-pressed="true"]{opacity:1;box-shadow:inset 0 -3px 0 rgba(0,0,0,.35)}
+.offlist{background:var(--panel);max-height:260px;overflow-y:auto}
+.offrow{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:8px 12px;border-top:1px solid var(--line);font-size:14px}
+.offrow:first-child{border-top:0}
+.offrow .pr{font:700 18px var(--display)}
+.badge{font:700 11px var(--display);letter-spacing:.08em;padding:2px 6px;border-radius:4px;background:var(--panel2);color:var(--muted)}
+.badge.fba{background:var(--accent);color:var(--accent-ink)}
+.offhead{display:flex;align-items:center;gap:8px;margin-top:12px}
 .links{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1.5px solid var(--line);border-radius:999px;font-size:14px;font-weight:600;color:var(--fg);text-decoration:none;background:var(--panel)}
 .chip.acc{border-color:var(--accent);color:var(--accent)}
@@ -154,6 +165,15 @@ table.ev small{color:var(--muted);display:block}
 <div class="sheet" id="sheet" hidden></div>
 
 <script>
+/* ============ error banner: show any script error on screen ============ */
+function showFatal(msg){
+  let b = document.getElementById("fatal");
+  if (!b){ b = document.createElement("div"); b.id = "fatal"; b.className = "err"; b.style.cssText = "position:fixed;left:10px;right:10px;top:calc(10px + env(safe-area-inset-top,0px));z-index:99"; b.onclick = () => b.remove(); document.body.appendChild(b); }
+  b.textContent = "App error: " + msg + "  (tap to close, screenshot it for Claude)";
+}
+window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
+window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
+
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -186,11 +206,12 @@ const S = {
   prep:     LS.get("prep", 0.00),          // per-unit prep cost
   defCost:  LS.get("defCost", 0.00),
   buybox:   LS.get("buybox", true),        // costs +2 Keepa tokens
+  autoOffers: LS.get("autoOffers", false), // live offers cost ~12 tokens per scan
   history:  LS.get("history", []),
   inv:      LS.get("inv", []),
   tokens:   LS.get("tokens", null)
 };
-function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","history","inv","tokens"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","history","inv","tokens"]) LS.set(k, S[k]); }
 
 /* ============ helpers ============ */
 const $ = s => document.querySelector(s);
@@ -205,21 +226,41 @@ function toast(msg){ const t=document.createElement("div"); t.className="toast";
 let current = null;   // {product, matches, cost, calc}
 let busy = false;
 
+let lookupCtl = null;
+async function keepaTokens(){
+  // free call: tokens left and refill rate
+  try{
+    const r = await fetch("https://api.keepa.com/token?key="+encodeURIComponent(S.key), {cache:"no-store"});
+    const j = await r.json();
+    if (j.tokensLeft!=null){ S.tokens = j.tokensLeft; save(); }
+    return j;
+  }catch(e){ return null; }
+}
 async function lookup(raw){
   const q = String(raw||"").trim().replace(/[^0-9A-Za-z]/g,"").toUpperCase();
   if (!q) return;
   if (!S.key){ renderScan("Add your Keepa API key in Settings first."); return; }
+  if (lookupCtl) lookupCtl.abort();          // drop any lookup still hanging
+  const ctl = lookupCtl = new AbortController();
+  const timer = setTimeout(() => ctl.abort("timeout"), 20000);
   busy = true; renderScan();
+  const t0 = Date.now();
+  const secTimer = setInterval(() => { const el = $("#lookSec"); if (el) el.textContent = Math.round((Date.now()-t0)/1000) + "s"; }, 1000);
   const isAsin = /^B0[0-9A-Z]{8}$/.test(q) || (/^[0-9]{9}[0-9X]$/.test(q) && q.length===10);
-  const params = new URLSearchParams({key:S.key, domain:"1", stats:"180", history:"1", rating:"0"});
+  const params = new URLSearchParams({key:S.key, domain:"1", stats:"180", history:"1", rating:"0", _:String(Date.now())});
   if (S.buybox) params.set("buybox","1");
   if (isAsin) params.set("asin", q); else params.set("code", q);
   try{
-    const r = await fetch("https://api.keepa.com/product?"+params);
-    const j = await r.json();
-    if (j.tokensLeft!=null){ S.tokens = j.tokensLeft; }
+    const r = await fetch("https://api.keepa.com/product?"+params, {signal:ctl.signal, cache:"no-store"});
+    let j = null; try { j = await r.json(); } catch(e) {}
+    if (j && j.tokensLeft!=null) S.tokens = j.tokensLeft;
+    if (r.status===429 || (j && j.tokensLeft!=null && j.tokensLeft<0 && !(j.products||[]).length)){
+      const wait = j && j.refillIn ? Math.ceil(j.refillIn/1000) : null;
+      throw new Error("Out of Keepa tokens" + (wait ? `. Next refill in ${wait}s.` : ". Wait a minute and scan again.") + (S.buybox ? " Turning off buy box in Settings makes each scan cheaper." : ""));
+    }
+    if (!r.ok) throw new Error("Keepa returned an error (HTTP "+r.status+")" + (j && j.error ? ": "+(j.error.message||j.error.type) : "") + ".");
+    if (!j) throw new Error("Keepa sent back an empty answer. Try again.");
     if (j.error) throw new Error(j.error.message || j.error.type || "Keepa error");
-    if (r.status===429) throw new Error("Out of Keepa tokens. Wait for them to refill.");
     const prods = (j.products||[]).filter(p => p && p.asin && p.title);
     if (!prods.length) throw new Error("No Amazon match for "+q+".");
     current = {product:prods[0], matches:prods.slice(1), cost:S.defCost, code:q};
@@ -227,14 +268,92 @@ async function lookup(raw){
     S.history.unshift(histEntry(current));
     S.history = S.history.slice(0,300);
     save();
-    busy = false; renderScan();
     if (navigator.vibrate) navigator.vibrate(current.calc.buy ? [60,40,60] : 120);
+    offTab = null;
+    busy = false; renderScan();
+    if (S.autoOffers) loadOffers();
   }catch(e){
+    if (ctl !== lookupCtl) return;            // a newer scan replaced this one
     busy = false;
-    renderScan(e.message === "Failed to fetch" ? "Couldn't reach Keepa. Check your connection." : e.message);
+    let msg = e && e.message;
+    if (ctl.signal.aborted){
+      const t = await keepaTokens();
+      msg = "Keepa didn't answer within 20 seconds." + (t && t.tokensLeft!=null ? ` Tokens left: ${t.tokensLeft}` + (t.refillRate ? `, refilling ${t.refillRate}/min.` : ".") : "") + (t && t.tokensLeft<=0 ? " You're out of tokens, which is the usual cause." : " Scan again.");
+    } else if (msg === "Failed to fetch" || msg === "Load failed"){
+      msg = "Couldn't reach Keepa. Check your connection and scan again.";
+    }
+    renderScan(msg);
+    save();
+  }finally{
+    clearTimeout(timer); clearInterval(secTimer);
+    if (ctl === lookupCtl) lookupCtl = null;
   }
 }
-function pick(p){ current.product = p; current.matches = []; current.calc = calc(p, current.cost); renderScan(); }
+/* ============ live offers ============ */
+const COND = {1:"New",2:"Like New",3:"Very Good",4:"Good",5:"Acceptable",6:"Refurb",7:"Collectible LN",8:"Collectible VG",9:"Collectible G",10:"Collectible A",11:"Collectible"};
+let offTab = null;
+function parseOffers(p){
+  const live = new Set(p.liveOffersOrder || []);
+  const out = [];
+  (p.offers || []).forEach((o, i) => {
+    if (live.size && !live.has(i)) return;
+    const c = o.offerCSV || []; if (c.length < 3) return;
+    const price = c[c.length-2], ship = c[c.length-1];
+    if (price == null || price < 0) return;
+    out.push({price:price/100, ship:Math.max(0,ship||0)/100, total:(price+Math.max(0,ship||0))/100,
+      cond:o.condition, condLabel:COND[o.condition] || "Other", fba:!!o.isFBA, prime:!!o.isPrime, amazon:!!o.isAmazon,
+      used:o.condition >= 2 && o.condition <= 5, isNew:o.condition === 1, comment:o.conditionComment || ""});
+  });
+  return out.sort((a,b) => a.total - b.total);
+}
+async function loadOffers(){
+  if (!current || current.offersLoading) return;
+  const asin = current.product.asin, mine = current;
+  mine.offersLoading = true; mine.offersErr = null; renderScan();
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 20000);
+  try{
+    const params = new URLSearchParams({key:S.key, domain:"1", asin, offers:"20", "only-live-offers":"1", history:"0", stats:"0", _:String(Date.now())});
+    const r = await fetch("https://api.keepa.com/product?"+params, {signal:ctl.signal, cache:"no-store"});
+    let j = null; try { j = await r.json(); } catch(e){}
+    if (j && j.tokensLeft != null) S.tokens = j.tokensLeft;
+    if (r.status === 429) throw new Error("Not enough Keepa tokens for offers (about 12 needed)." + (j && j.refillIn ? ` Refill in ${Math.ceil(j.refillIn/1000)}s.` : ""));
+    if (!r.ok || !j) throw new Error("Keepa offers request failed (HTTP "+r.status+").");
+    if (j.error) throw new Error(j.error.message || j.error.type);
+    const p = (j.products||[])[0];
+    if (!p) throw new Error("No offer data for this item.");
+    mine.offers = parseOffers(p);
+  }catch(e){
+    mine.offersErr = ctl.signal.aborted ? "Keepa didn't answer within 20 seconds." : e.message;
+  }finally{
+    clearTimeout(tm); mine.offersLoading = false; save();
+    if (current === mine){ current.calc = calc(current.product, current.cost); renderScan(); }
+  }
+}
+function offersHTML(){
+  const pr = current.calc.pr, o = current.offers;
+  const usedL = o ? o.filter(x => x.used) : null, newL = o ? o.filter(x => x.isNew) : null;
+  const fbaL = o ? o.filter(x => x.fba && (S.cond === "used" ? x.used : x.isNew)) : null;
+  const counts = {used: usedL ? usedL.length : pr.countUsed, new: newL ? newL.length : pr.countNew, fba: fbaL ? fbaL.length : "?"};
+  if (!offTab) offTab = S.cond === "used" ? "used" : "new";
+  const list = {used:usedL, new:newL, fba:fbaL}[offTab];
+  const tabBtn = (k, label, color) => `<button data-off="${k}" style="background:${color}" aria-pressed="${offTab===k}">${label} (${counts[k]})</button>`;
+  let body;
+  if (current.offersLoading) body = `<div class="empty" style="padding:16px">Loading live offers…</div>`;
+  else if (current.offersErr) body = `<div class="err" style="margin:8px">${esc(current.offersErr)}</div>`;
+  else if (!o) body = `<div class="empty" style="padding:14px"><button class="btn pri" id="loadOff" style="width:100%">Load live offers (≈12 tokens)</button></div>`;
+  else if (!list.length) body = `<div class="empty" style="padding:16px">No ${offTab === "fba" ? "FBA " + S.cond : offTab} offers right now</div>`;
+  else body = list.map(x => `<div class="offrow">
+      <span class="pr num">${money(x.total)}</span>
+      <span style="min-width:0">${esc(x.condLabel)}${x.ship ? ` <span class="note">(${money(x.price)} + ${money(x.ship)} ship)</span>` : ""}</span>
+      <span>${x.amazon ? '<span class="badge fba">AMZ</span>' : x.fba ? '<span class="badge fba">FBA</span>' : '<span class="badge">FBM</span>'}</span>
+    </div>`).join("");
+  return `<div class="offhead"><span class="label grow" style="flex:1">Compare offers</span>${o ? '<button class="mini" id="loadOff">Refresh</button>' : ""}</div>
+  <div class="offers">
+    <div class="offtabs">${tabBtn("used","USED","#b8c0c8")}${tabBtn("new","NEW","var(--blue)")}${tabBtn("fba","FBA","var(--accent)")}</div>
+    <div class="offlist">${body}</div>
+  </div>`;
+}
+function pick(p){ current.product = p; current.matches = []; current.offers = null; current.offersErr = null; current.calc = calc(p, current.cost); renderScan(); }
 
 /* ============ math ============ */
 function readPrices(p){
@@ -253,9 +372,15 @@ function readPrices(p){
 }
 function calc(p, cost){
   const pr = readPrices(p);
-  const sell = S.cond === "used"
+  let sell = S.cond === "used"
     ? (pr.usedBB ?? pr.usedVG ?? pr.usedG ?? pr.usedLow)
     : (pr.newBB ?? pr.newFBA ?? pr.newLow ?? pr.amazon);
+  let sellSrc = "buy box";
+  const offs = current && current.product === p ? current.offers : null;
+  if (offs){
+    const fba = offs.filter(x => x.fba && (S.cond === "used" ? x.used : x.isNew));
+    if (fba.length){ sell = fba[0].total; sellSrc = "lowest FBA"; }
+  }
   const isBook = p.rootCategory === 283155 || p.productGroup === "Book" || p.type === "BOOK";
   const refPct = (p.referralFeePercentage ?? p.referralFeePercent ?? 15) / 100;
   const fbaFee = p.fbaFees && p.fbaFees.pickAndPackFee > 0 ? p.fbaFees.pickAndPackFee/100 : 3.50;
@@ -266,7 +391,7 @@ function calc(p, cost){
     fees = sell*refPct + closing + fbaFee + lbs*S.inbound + S.prep;
     profit = sell - fees - (cost||0);
   }
-  const res = {pr, sell, fees, profit, fbaFee, refPct, closing, lbs, isBook, buy:false, why:"", trigger:null};
+  const res = {pr, sell, sellSrc, fees, profit, fbaFee, refPct, closing, lbs, isBook, buy:false, why:"", trigger:null};
   if (profit == null){ res.why = "No price"; return res; }
   if (p.isAdultProduct){ res.why = "Adult item"; return res; }
   if (S.mode === "ev") return evDecide(res);
@@ -299,7 +424,7 @@ function bucket(pr){
 }
 function evDecide(res){
   const b = bucket(res.pr);
-  const row = S.ev.find(r => r.key === b);
+  const row = S.ev.find(r => r.key === b) || DEFAULT_EV.find(r => r.key === b);
   res.trigger = row.label;
   if (row.keep == null){ res.why = "Pass: " + row.label.toLowerCase(); return res; }
   const expected = res.profit * row.pct/100;
@@ -314,7 +439,7 @@ function histEntry(cur){
 }
 function imgUrl(p){
   let n = null;
-  if (Array.isArray(p.images) && p.images.length) n = p.images[0].m || p.images[0].l;
+  if (Array.isArray(p.images) && p.images.length) n = typeof p.images[0] === "string" ? p.images[0] : (p.images[0].m || p.images[0].l);
   else if (p.imagesCSV) n = p.imagesCSV.split(",")[0];
   return n ? "https://m.media-amazon.com/images/I/" + n : "";
 }
@@ -337,6 +462,15 @@ function scanBar(){
 }
 function renderScan(err){
   if (tab !== "scan") return;
+  try { renderScanInner(err); }
+  catch(e){
+    console.error(e);
+    busy = false;
+    $("#main").innerHTML = `<div class="err"><b>App error:</b> ${esc(e && e.message)}<br><small>${esc((e && e.stack || "").split("\n").slice(0,3).join(" | "))}</small><br>Screenshot this and send it to Claude.</div>${err ? `<div class="err">${esc(err)}</div>` : ""}` + scanBar();
+    try { wireScanBar(); } catch(e2){}
+  }
+}
+function renderScanInner(err){
   const head = `<div class="toprow">
     <div class="seg" role="group" aria-label="Condition">
       <button data-cond="used" aria-pressed="${S.cond==="used"}">USED</button>
@@ -349,7 +483,7 @@ function renderScan(err){
     <span class="tokens num" title="Keepa tokens left">${S.tokens==null ? "— tok" : kfmt(S.tokens)+" tok"}</span>
   </div>`;
   let body;
-  if (busy) body = `<div class="empty"><b>Looking up…</b>Pulling Keepa data</div>`;
+  if (busy) body = `<div class="empty"><b>Looking up…</b>Pulling Keepa data <span id="lookSec"></span><br><button class="mini" id="cancelLookup" style="margin-top:10px">Cancel</button></div>`;
   else if (!current) body = `<div class="empty"><b>Ready to scan</b>${S.key ? "Tap the camera or type a code. Bluetooth scanners work in the box too." : "Add your Keepa API key in Settings to start."}</div>`;
   else body = resultHTML();
   $("#main").innerHTML = head + body + (err ? `<div class="err">${esc(err)}</div>` : "") + scanBar();
@@ -361,21 +495,22 @@ function resultHTML(){
   const off = S.cond === "used"
     ? [["USED", pr.usedLow, "#9aa3ad"], ["USED BB", pr.usedBB, "var(--teal)"], ["LIKE NEW", pr.usedLN, "var(--accent)"]]
     : [["NEW", pr.newLow, "#9aa3ad"], ["NEW BB", pr.newBB, "var(--blue)"], ["AMAZON", pr.amazon, "var(--accent)"]];
-  const sc = encodeURIComponent(p.title.slice(0,80));
+  const sc = encodeURIComponent(String(p.title||"").slice(0,80));
   return `
   <div class="verdict ${cls}">
     <div><span class="big num">${money(c.profit)}</span><span class="label">FBA profit</span></div>
     <div><span class="vword">${c.profit==null ? "—" : c.buy ? "BUY" : "SKIP"}</span><span class="why">${esc(c.why)}</span></div>
-    <div><input class="costin num" id="cost" inputmode="decimal" value="${(current.cost||0).toFixed(2)}" aria-label="Buy cost"><span class="label">Buy cost</span></div>
+    <div><input class="costin num" id="cost" inputmode="decimal" value="${(Number(current.cost)||0).toFixed(2)}" aria-label="Buy cost"><span class="label">Buy cost</span></div>
   </div>
   <div class="stats">
     <div><div class="v num">${kfmt(pr.rank)}</div><small>Rank · ${kfmt(pr.avgRank)} avg 6m</small></div>
     <div><div class="v num">${pr.pulse}</div><small>Sales pulse 6m</small></div>
-    <div><div class="v num">${money(c.sell)}</div><small>Sell price</small></div>
+    <div><div class="v num">${money(c.sell)}</div><small>Sell · ${esc(c.sellSrc)}</small></div>
   </div>
   <div class="prices">
     ${off.map(o => `<div style="padding:0"><div class="h" style="background:${o[2]};color:#111">${o[0]}</div><div class="p num">${money(o[1])}</div></div>`).join("")}
   </div>
+  ${offersHTML()}
   <div class="note" style="margin-top:6px">Fees ${money(c.fees)} = ${Math.round(c.refPct*100)}% referral${c.closing?" + $1.80 closing":""} + ${money(c.fbaFee)} FBA + ${money(c.lbs*S.inbound)} inbound${S.prep?" + prep":""} · offers: ${pr.countUsed} used / ${pr.countNew} new</div>
   <div class="links">
     <button class="chip acc" id="chartBtn">Chart</button>
@@ -399,18 +534,24 @@ function resultHTML(){
     <button class="btn" id="clearRes">Next item</button>
   </div>`;
 }
-function wireScan(){
+function wireScanBar(){
   const f = $("#scanForm");
   f.addEventListener("submit", e => { e.preventDefault(); const v=$("#q").value; $("#q").value=""; lookup(v); });
   $("#camBtn").addEventListener("click", openCam);
   $("#photoIn").addEventListener("change", photoScan);
+  const c = $("#cancelLookup"); if (c) c.onclick = () => { if (lookupCtl) lookupCtl.abort(); lookupCtl = null; busy = false; renderScan("Lookup canceled."); };
+}
+function wireScan(){
+  wireScanBar();
   document.querySelectorAll("[data-cond]").forEach(b => b.onclick = () => { S.cond=b.dataset.cond; save(); if(current) current.calc=calc(current.product,current.cost); renderScan(); });
   document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { S.mode=b.dataset.mode; save(); if(current) current.calc=calc(current.product,current.cost); renderScan(); });
-  if (!current) return;
+  if (!current || busy) return;   // the "Looking up" screen has no result controls to wire
   const cost = $("#cost");
   cost.addEventListener("change", () => { current.cost = parseFloat(cost.value)||0; current.calc = calc(current.product, current.cost); renderScan(); });
   cost.addEventListener("focus", () => cost.select());
   $("#chartBtn").onclick = () => openChart(current.product);
+  document.querySelectorAll("[data-off]").forEach(b => b.onclick = () => { offTab = b.dataset.off; renderScan(); });
+  const lo = $("#loadOff"); if (lo) lo.onclick = loadOffers;
   $("#clearRes").onclick = () => { current=null; renderScan(); setTimeout(()=>$("#q").focus(),0); };
   $("#addInv").onclick = () => {
     const p=current.product, c=current.calc;
@@ -669,6 +810,8 @@ function renderSettings(){
   <div class="card">
     <div class="field">Keepa API key<input id="key" type="password" value="${esc(S.key)}" placeholder="Paste your key" autocomplete="off"></div>
     <div class="note" style="margin-top:6px">Stored only on this phone. Each scan uses about 1 token, plus 2 with buy box on.</div>
+    <div class="row" style="margin-top:10px"><span class="grow">Auto-load live offers (≈12 tokens)</span><label class="switch"><input type="checkbox" id="ao" ${S.autoOffers?"checked":""}><span></span></label></div>
+    <div class="row" style="margin-top:8px"><button class="mini" id="tokBtn">Check tokens</button><span class="note grow" id="tokOut"></span></div>
     <div class="row" style="margin-top:10px"><span class="grow">Buy box prices (+2 tokens)</span><label class="switch"><input type="checkbox" id="bb" ${S.buybox?"checked":""}><span></span></label></div>
   </div>
   <div class="card"><div class="label" style="margin-bottom:8px">Costs</div>
@@ -703,6 +846,8 @@ function renderSettings(){
   const num = (el, d=0) => { const v=parseFloat(el.value); return isNaN(v)?d:v; };
   $("#key").onchange = e => { S.key = e.target.value.trim(); save(); toast("Key saved"); };
   $("#bb").onchange = e => { S.buybox = e.target.checked; save(); };
+  $("#ao").onchange = e => { S.autoOffers = e.target.checked; save(); };
+  $("#tokBtn").onclick = async () => { $("#tokOut").textContent = "Checking…"; const t = await keepaTokens(); $("#tokOut").textContent = t && t.tokensLeft!=null ? `${t.tokensLeft} left · refills ${t.refillRate}/min` + (t.refillIn ? ` · next in ${Math.ceil(t.refillIn/1000)}s` : "") : (t && t.error ? (t.error.message||"Key rejected") : "Couldn't reach Keepa"); };
   $("#inb").onchange = e => { S.inbound = num(e.target, .4); save(); };
   $("#prep").onchange = e => { S.prep = num(e.target); save(); };
   $("#dc").onchange = e => { S.defCost = num(e.target); save(); };
