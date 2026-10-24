@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#111418">
+<title>Lisy Scout</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+/* Layout: one-screen app, sticky scan header, scrolling body, fixed tab bar */
+:root{
+  --bg:#111418; --panel:#1b2026; --panel2:#232a31; --line:#2f3740;
+  --fg:#e9edf1; --muted:#8d98a4; --accent:#f5a623; --accent-ink:#1a1204;
+  --buy:#22c55e; --skip:#e5534b; --warn:#eab308; --blue:#38bdf8; --pink:#ec4899; --teal:#2dd4bf;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Barlow",system-ui,-apple-system,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.4 var(--body);-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input,select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+.app{display:flex;flex-direction:column;height:100%;padding-top:env(safe-area-inset-top,0px)}
+main{flex:1;overflow-y:auto;padding:12px max(14px,env(safe-area-inset-left,0px)) 24px max(14px,env(safe-area-inset-right,0px))}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+h2{font:700 22px/1.1 var(--display);letter-spacing:.02em;margin:4px 0 10px;text-transform:uppercase}
+
+/* tab bar */
+nav.tabs{display:grid;grid-template-columns:repeat(4,1fr);background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+nav.tabs button{padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--muted);font-size:12px}
+nav.tabs button[aria-current="true"]{color:var(--accent)}
+nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
+
+/* scanner */
+.toprow{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.seg{display:inline-flex;border:1.5px solid var(--accent);border-radius:9px;overflow:hidden}
+.seg button{padding:5px 12px;font:700 15px var(--display);letter-spacing:.06em;color:var(--accent)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.tokens{margin-left:auto;padding:5px 10px;border:1px solid var(--line);border-radius:9px;font-size:13px;color:var(--muted)}
+.verdict{display:grid;grid-template-columns:1fr 1.2fr 1fr;border-radius:12px;overflow:hidden;background:var(--panel2)}
+.verdict>div{padding:14px 6px;text-align:center;display:flex;flex-direction:column;justify-content:center;gap:3px}
+.verdict>div+div{border-left:1px solid rgba(0,0,0,.25)}
+.verdict.buy{background:var(--buy);color:#05230f}
+.verdict.skip{background:var(--skip);color:#2a0705}
+.verdict.buy .label,.verdict.skip .label{color:inherit;opacity:.8}
+.big{font:700 30px/1 var(--display)}
+.vword{font:700 38px/1 var(--display);letter-spacing:.04em}
+.why{font-size:12px;font-weight:600;opacity:.9}
+.costin{background:rgba(0,0,0,.18);border:0;text-align:center;font:700 26px var(--display);padding:2px;color:inherit;width:90%;margin:0 auto}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border-radius:10px;overflow:hidden;margin-top:10px}
+.stats>div{background:var(--panel);padding:10px 6px;text-align:center}
+.stats .v{font:700 24px/1.1 var(--display)}
+.stats small{color:var(--muted);font-size:12px}
+.prices{display:grid;grid-template-columns:repeat(3,1fr);margin-top:10px;border-radius:10px;overflow:hidden}
+.prices>div{padding:7px 4px;text-align:center}
+.prices .h{font:700 15px var(--display);letter-spacing:.08em}
+.prices .p{background:var(--panel);font-size:17px;padding:9px 4px}
+.links{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1.5px solid var(--line);border-radius:999px;font-size:14px;font-weight:600;color:var(--fg);text-decoration:none;background:var(--panel)}
+.chip.acc{border-color:var(--accent);color:var(--accent)}
+.prod{display:flex;gap:12px;margin-top:14px;align-items:flex-start}
+.prod img{width:76px;height:96px;object-fit:contain;background:#fff;border-radius:8px;flex:none}
+.prod .t{font-weight:600;font-size:17px;line-height:1.25}
+.prod .meta{color:var(--muted);font-size:13px;margin-top:3px}
+.asin{color:var(--accent);font-weight:700}
+.matches{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.matches button{text-align:left;border:1.5px solid var(--accent);color:var(--accent);border-radius:999px;padding:5px 12px;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px}
+.btn{padding:12px;border-radius:10px;font-weight:700;background:var(--panel2);border:1px solid var(--line);text-align:center}
+.btn.pri{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.scanbar{display:flex;gap:8px;align-items:center;border:2px solid var(--accent);border-radius:14px;padding:6px 6px 6px 12px;background:var(--panel);margin-top:14px}
+.scanbar input{border:0;background:none;padding:6px 0;font-size:17px}
+.scanbar input:focus-visible{outline:none}
+.round{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;flex:none}
+.round.cam{background:var(--accent);color:var(--accent-ink)}
+.round svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2}
+.empty{padding:28px 10px;text-align:center;color:var(--muted)}
+.empty b{display:block;color:var(--fg);font:700 22px var(--display);text-transform:uppercase;margin-bottom:4px}
+.err{background:rgba(229,83,75,.12);border:1px solid var(--skip);color:#ffb4ae;padding:10px 12px;border-radius:10px;margin-top:10px;font-size:14px}
+.note{color:var(--muted);font-size:13px}
+
+/* camera overlay */
+.cam-wrap{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column}
+.cam-wrap video{flex:1;width:100%;object-fit:cover;min-height:0}
+.reticle{position:absolute;left:10%;right:10%;top:40%;height:20%;border:3px solid var(--accent);border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.35)}
+.cam-bar{display:flex;justify-content:space-between;align-items:center;padding:14px max(16px,env(safe-area-inset-left,0px)) calc(14px + env(safe-area-inset-bottom,0px));background:#000;color:#fff}
+
+/* chart sheet */
+.sheet{position:fixed;inset:0;background:var(--bg);z-index:40;display:flex;flex-direction:column;padding:calc(10px + env(safe-area-inset-top,0px)) max(14px,env(safe-area-inset-left,0px)) calc(14px + env(safe-area-inset-bottom,0px)) max(14px,env(safe-area-inset-right,0px));overflow-y:auto}
+.sheet-head{display:flex;gap:10px;align-items:center}
+.sheet-head .t{flex:1;min-width:0;font:700 20px var(--display);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pillrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.pill{padding:6px 12px;border-radius:999px;border:1.5px solid var(--line);font-weight:700;font-size:14px}
+.pill[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.ser{padding:5px 10px;border-radius:999px;border:1.5px solid var(--c);font-weight:600;font-size:13px;display:inline-flex;align-items:center;gap:6px;opacity:.45}
+.ser::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c)}
+.ser[aria-pressed="true"]{opacity:1}
+.chartbox{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px;margin-top:12px}
+canvas{width:100%;height:320px;display:block;touch-action:none}
+.readout{margin-top:10px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:14px;color:var(--muted);min-height:44px}
+
+/* lists & settings */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+.row{display:flex;gap:10px;align-items:center}
+.row .grow{flex:1;min-width:0}
+.tag{font:700 12px var(--display);letter-spacing:.08em;padding:2px 7px;border-radius:5px}
+.tag.buy{background:var(--buy);color:#05230f}.tag.skip{background:var(--skip);color:#2a0705}
+.trig{border-left:4px solid var(--buy)}
+.trig.yellow{border-left-color:var(--warn)}.trig.red{border-left-color:var(--skip)}
+.trig-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:8px}
+.trig-grid label,.field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+.pair{display:flex;gap:6px}
+.switch{position:relative;width:50px;height:30px;flex:none}
+.switch input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer;z-index:1}
+.switch span{position:absolute;inset:0;border-radius:99px;background:var(--line);transition:.2s}
+.switch span::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;transition:.2s}
+.switch input:checked+span{background:var(--accent)}
+.switch input:checked+span::after{left:23px}
+table.ev{width:100%;border-collapse:collapse;font-size:14px}
+table.ev td{padding:7px 4px;border-top:1px solid var(--line);vertical-align:middle}
+table.ev input{text-align:center;padding:6px}
+table.ev small{color:var(--muted);display:block}
+.mini{font-size:13px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel2)}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(80px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:9px 16px;border-radius:999px;font-weight:600;z-index:60}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+<main id="main"></main>
+<nav class="tabs" id="tabs">
+  <button data-tab="scan" aria-current="true"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>Scanner</button>
+  <button data-tab="history"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>History</button>
+  <button data-tab="inventory"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 10h16M10 14h4"/></svg>Inventory</button>
+  <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
+</nav>
+</div>
+
+<div class="cam-wrap" id="cam" hidden>
+  <video id="video" playsinline muted></video>
+  <div class="reticle"></div>
+  <div class="cam-bar"><span>Point at the barcode</span><button class="btn" id="camClose">Close</button></div>
+</div>
+
+<div class="sheet" id="sheet" hidden></div>
+
+<script>
+/* ============ storage ============ */
+const LS = {
+  get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem("scout."+k, JSON.stringify(v)); }catch(e){} }
+};
+const DEFAULT_TRIGGERS = [
+  {name:"Fast Mover",        on:true, color:"green",  rMin:1,       rMax:250000,   pMin:24, pMax:186, minProfit:4},
+  {name:"Good Mover",        on:true, color:"green",  rMin:250000,  rMax:1000000,  pMin:24, pMax:186, minProfit:5},
+  {name:"Solid Buy",         on:true, color:"green",  rMin:1000000, rMax:3000000,  pMin:12, pMax:186, minProfit:7},
+  {name:"Lowest Price Check",on:true, color:"yellow", rMin:1000000, rMax:3000000,  pMin:6,  pMax:186, minProfit:7},
+  {name:"Lowest Price Check",on:true, color:"yellow", rMin:3000000, rMax:6000000,  pMin:3,  pMax:186, minProfit:20},
+  {name:"Exclude Trigger",   on:true, color:"red",    rMin:6000000, rMax:100000000,pMin:100,pMax:101, minProfit:10000}
+];
+const DEFAULT_EV = [
+  {key:"daily",   label:"Daily or every other day", sub:"137 or more sales a year", pct:90, keep:2},
+  {key:"weekly",  label:"Weekly or twice a week",   sub:"35 to 136 sales a year",   pct:75, keep:3},
+  {key:"monthly", label:"Monthly or twice a month", sub:"10 to 34 sales a year",    pct:60, keep:5},
+  {key:"quarter", label:"Quarterly or twice a quarter", sub:"3 to 9 sales a year",  pct:40, keep:8},
+  {key:"few",     label:"A few times a year",       sub:"1 or 2 sales a year",      pct:20, keep:null},
+  {key:"none",    label:"None this year",           sub:"ranked, but quiet for a year", pct:10, keep:null},
+  {key:"norank",  label:"No sales rank at all",     sub:"no rank at all",           pct:5,  keep:null}
+];
+const S = {
+  key:      LS.get("key",""),
+  mode:     LS.get("mode","triggers"),     // triggers | ev
+  cond:     LS.get("cond","used"),         // used | new
+  triggers: LS.get("triggers", DEFAULT_TRIGGERS),
+  ev:       LS.get("ev", DEFAULT_EV),
+  inbound:  LS.get("inbound", 0.40),       // $/lb to ship into FBA
+  prep:     LS.get("prep", 0.00),          // per-unit prep cost
+  defCost:  LS.get("defCost", 0.00),
+  buybox:   LS.get("buybox", true),        // costs +2 Keepa tokens
+  history:  LS.get("history", []),
+  inv:      LS.get("inv", []),
+  tokens:   LS.get("tokens", null)
+};
+function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","history","inv","tokens"]) LS.set(k, S[k]); }
+
+/* ============ helpers ============ */
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = v => v==null || isNaN(v) ? "—" : (v<0?"-$":"$") + Math.abs(v).toFixed(2);
+const kfmt = n => n==null || n<0 ? "—" : n>=1e6 ? (n/1e6).toFixed(n>=1e7?0:1)+"M" : n>=1e3 ? Math.round(n/1e3)+"K" : String(n);
+const cents = v => v==null || v<0 ? null : v/100;
+const keepaToMs = t => (t + 21564000) * 60000;
+function toast(msg){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),1800); }
+
+/* ============ Keepa ============ */
+let current = null;   // {product, matches, cost, calc}
+let busy = false;
+
+async function lookup(raw){
+  const q = String(raw||"").trim().replace(/[^0-9A-Za-z]/g,"").toUpperCase();
+  if (!q) return;
+  if (!S.key){ renderScan("Add your Keepa API key in Settings first."); return; }
+  busy = true; renderScan();
+  const isAsin = /^B0[0-9A-Z]{8}$/.test(q) || (/^[0-9]{9}[0-9X]$/.test(q) && q.length===10);
+  const params = new URLSearchParams({key:S.key, domain:"1", stats:"180", history:"1", rating:"0"});
+  if (S.buybox) params.set("buybox","1");
+  if (isAsin) params.set("asin", q); else params.set("code", q);
+  try{
+    const r = await fetch("https://api.keepa.com/product?"+params);
+    const j = await r.json();
+    if (j.tokensLeft!=null){ S.tokens = j.tokensLeft; }
+    if (j.error) throw new Error(j.error.message || j.error.type || "Keepa error");
+    if (r.status===429) throw new Error("Out of Keepa tokens. Wait for them to refill.");
+    const prods = (j.products||[]).filter(p => p && p.asin && p.title);
+    if (!prods.length) throw new Error("No Amazon match for "+q+".");
+    current = {product:prods[0], matches:prods.slice(1), cost:S.defCost, code:q};
+    current.calc = calc(current.product, current.cost);
+    S.history.unshift(histEntry(current));
+    S.history = S.history.slice(0,300);
+    save();
+    busy = false; renderScan();
+    if (navigator.vibrate) navigator.vibrate(current.calc.buy ? [60,40,60] : 120);
+  }catch(e){
+    busy = false;
+    renderScan(e.message === "Failed to fetch" ? "Couldn't reach Keepa. Check your connection." : e.message);
+  }
+}
+function pick(p){ current.product = p; current.matches = []; current.calc = calc(p, current.cost); renderScan(); }
+
+/* ============ math ============ */
+function readPrices(p){
+  const c = (p.stats && p.stats.current) || [];
+  const at = i => cents(c[i]);
+  return {
+    amazon: at(0), newLow: at(1), usedLow: at(2),
+    newBB: p.stats && p.stats.buyBoxPrice > 0 ? (p.stats.buyBoxPrice + Math.max(0,p.stats.buyBoxShipping||0))/100 : at(18),
+    usedBB: p.stats && p.stats.buyBoxUsedPrice > 0 ? (p.stats.buyBoxUsedPrice + Math.max(0,p.stats.buyBoxUsedShipping||0))/100 : at(32),
+    newFBA: at(10), usedLN: at(19), usedVG: at(20), usedG: at(21), usedA: at(22),
+    rank: c[3] != null && c[3] > 0 ? c[3] : null,
+    avgRank: p.stats && p.stats.avg180 && p.stats.avg180[3] > 0 ? p.stats.avg180[3] : null,
+    pulse: p.stats ? Math.max(0, p.stats.salesRankDrops180 ?? 0) : 0,
+    countNew: c[11] > 0 ? c[11] : 0, countUsed: c[12] > 0 ? c[12] : 0
+  };
+}
+function calc(p, cost){
+  const pr = readPrices(p);
+  const sell = S.cond === "used"
+    ? (pr.usedBB ?? pr.usedVG ?? pr.usedG ?? pr.usedLow)
+    : (pr.newBB ?? pr.newFBA ?? pr.newLow ?? pr.amazon);
+  const isBook = p.rootCategory === 283155 || p.productGroup === "Book" || p.type === "BOOK";
+  const refPct = (p.referralFeePercentage ?? p.referralFeePercent ?? 15) / 100;
+  const fbaFee = p.fbaFees && p.fbaFees.pickAndPackFee > 0 ? p.fbaFees.pickAndPackFee/100 : 3.50;
+  const lbs = p.packageWeight > 0 ? p.packageWeight/453.6 : 1;
+  const closing = isBook ? 1.80 : 0;
+  let fees = null, profit = null;
+  if (sell){
+    fees = sell*refPct + closing + fbaFee + lbs*S.inbound + S.prep;
+    profit = sell - fees - (cost||0);
+  }
+  const res = {pr, sell, fees, profit, fbaFee, refPct, closing, lbs, isBook, buy:false, why:"", trigger:null};
+  if (profit == null){ res.why = "No price"; return res; }
+  if (p.isAdultProduct){ res.why = "Adult item"; return res; }
+  if (S.mode === "ev") return evDecide(res);
+  return trigDecide(res);
+}
+function trigDecide(res){
+  const rank = res.pr.rank ?? 0, pulse = res.pr.pulse;
+  for (const t of S.triggers){
+    if (!t.on) continue;
+    const inRank = rank >= t.rMin && rank <= t.rMax;
+    const inPulse = pulse >= t.pMin && pulse <= t.pMax;
+    if (inRank && inPulse){
+      res.trigger = t.name;
+      if (t.color === "red"){ res.why = t.name; return res; }
+      if (res.profit >= t.minProfit){ res.buy = true; res.why = t.name; return res; }
+    }
+  }
+  res.why = res.trigger ? "Under min profit" : "No trigger hit";
+  return res;
+}
+function bucket(pr){
+  if (!pr.rank) return "norank";
+  const yr = pr.pulse * 2;  // 180-day drops, annualized
+  if (yr >= 137) return "daily";
+  if (yr >= 35) return "weekly";
+  if (yr >= 10) return "monthly";
+  if (yr >= 3) return "quarter";
+  if (yr >= 1) return "few";
+  return "none";
+}
+function evDecide(res){
+  const b = bucket(res.pr);
+  const row = S.ev.find(r => r.key === b);
+  res.trigger = row.label;
+  if (row.keep == null){ res.why = "Pass: " + row.label.toLowerCase(); return res; }
+  const expected = res.profit * row.pct/100;
+  res.expected = expected;
+  res.buy = expected >= row.keep;
+  res.why = (res.buy ? "" : "Low: ") + "EV " + money(expected);
+  return res;
+}
+function histEntry(cur){
+  const p = cur.product, c = cur.calc;
+  return {t:Date.now(), asin:p.asin, title:p.title, img:imgUrl(p), buy:c.buy, profit:c.profit, rank:c.pr.rank, pulse:c.pr.pulse, why:c.why};
+}
+function imgUrl(p){
+  let n = null;
+  if (Array.isArray(p.images) && p.images.length) n = p.images[0].m || p.images[0].l;
+  else if (p.imagesCSV) n = p.imagesCSV.split(",")[0];
+  return n ? "https://m.media-amazon.com/images/I/" + n : "";
+}
+
+/* ============ views ============ */
+let tab = "scan";
+function setTab(t){
+  tab = t;
+  document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-current", String(b.dataset.tab===t)));
+  ({scan:renderScan, history:renderHistory, inventory:renderInventory, settings:renderSettings})[t]();
+}
+document.getElementById("tabs").addEventListener("click", e => { const b=e.target.closest("button"); if(b) setTab(b.dataset.tab); });
+
+function scanBar(){
+  return `<form class="scanbar" id="scanForm" autocomplete="off">
+    <input id="q" inputmode="text" placeholder="Scan or type ISBN, UPC, ASIN" enterkeyhint="search" aria-label="ISBN, UPC or ASIN">
+    <button class="round cam" type="button" id="camBtn" aria-label="Scan with camera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+  </form>
+  <label class="note" style="display:block;margin-top:6px">No live camera? <input type="file" accept="image/*" capture="environment" id="photoIn" style="width:auto;border:0;padding:0;font-size:13px"></label>`;
+}
+function renderScan(err){
+  if (tab !== "scan") return;
+  const head = `<div class="toprow">
+    <div class="seg" role="group" aria-label="Condition">
+      <button data-cond="used" aria-pressed="${S.cond==="used"}">USED</button>
+      <button data-cond="new" aria-pressed="${S.cond==="new"}">NEW</button>
+    </div>
+    <div class="seg" role="group" aria-label="Decision mode">
+      <button data-mode="triggers" aria-pressed="${S.mode==="triggers"}">TRIG</button>
+      <button data-mode="ev" aria-pressed="${S.mode==="ev"}">EV</button>
+    </div>
+    <span class="tokens num" title="Keepa tokens left">${S.tokens==null ? "— tok" : kfmt(S.tokens)+" tok"}</span>
+  </div>`;
+  let body;
+  if (busy) body = `<div class="empty"><b>Looking up…</b>Pulling Keepa data</div>`;
+  else if (!current) body = `<div class="empty"><b>Ready to scan</b>${S.key ? "Tap the camera or type a code. Bluetooth scanners work in the box too." : "Add your Keepa API key in Settings to start."}</div>`;
+  else body = resultHTML();
+  $("#main").innerHTML = head + body + (err ? `<div class="err">${esc(err)}</div>` : "") + scanBar();
+  wireScan();
+}
+function resultHTML(){
+  const p = current.product, c = current.calc, pr = c.pr;
+  const cls = c.profit == null ? "" : c.buy ? "buy" : "skip";
+  const off = S.cond === "used"
+    ? [["USED", pr.usedLow, "#9aa3ad"], ["USED BB", pr.usedBB, "var(--teal)"], ["LIKE NEW", pr.usedLN, "var(--accent)"]]
+    : [["NEW", pr.newLow, "#9aa3ad"], ["NEW BB", pr.newBB, "var(--blue)"], ["AMAZON", pr.amazon, "var(--accent)"]];
+  const sc = encodeURIComponent(p.title.slice(0,80));
+  return `
+  <div class="verdict ${cls}">
+    <div><span class="big num">${money(c.profit)}</span><span class="label">FBA profit</span></div>
+    <div><span class="vword">${c.profit==null ? "—" : c.buy ? "BUY" : "SKIP"}</span><span class="why">${esc(c.why)}</span></div>
+    <div><input class="costin num" id="cost" inputmode="decimal" value="${(current.cost||0).toFixed(2)}" aria-label="Buy cost"><span class="label">Buy cost</span></div>
+  </div>
+  <div class="stats">
+    <div><div class="v num">${kfmt(pr.rank)}</div><small>Rank · ${kfmt(pr.avgRank)} avg 6m</small></div>
+    <div><div class="v num">${pr.pulse}</div><small>Sales pulse 6m</small></div>
+    <div><div class="v num">${money(c.sell)}</div><small>Sell price</small></div>
+  </div>
+  <div class="prices">
+    ${off.map(o => `<div style="padding:0"><div class="h" style="background:${o[2]};color:#111">${o[0]}</div><div class="p num">${money(o[1])}</div></div>`).join("")}
+  </div>
+  <div class="note" style="margin-top:6px">Fees ${money(c.fees)} = ${Math.round(c.refPct*100)}% referral${c.closing?" + $1.80 closing":""} + ${money(c.fbaFee)} FBA + ${money(c.lbs*S.inbound)} inbound${S.prep?" + prep":""} · offers: ${pr.countUsed} used / ${pr.countNew} new</div>
+  <div class="links">
+    <button class="chip acc" id="chartBtn">Chart</button>
+    <a class="chip" target="_blank" rel="noopener" href="https://www.amazon.com/dp/${p.asin}">Amazon</a>
+    <a class="chip" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/product-search/search?q=${p.asin}">Gated?</a>
+    <a class="chip" target="_blank" rel="noopener" href="https://www.ebay.com/sch/i.html?_nkw=${sc}&LH_Sold=1&LH_Complete=1">eBay sold</a>
+    <a class="chip" target="_blank" rel="noopener" href="https://keepa.com/#!product/1-${p.asin}">Keepa</a>
+    ${c.isBook ? `<a class="chip" target="_blank" rel="noopener" href="https://bookscouter.com/book/${current.code}">Buyback</a>` : ""}
+  </div>
+  <div class="prod">
+    ${imgUrl(p) ? `<img src="${imgUrl(p)}" alt="">` : ""}
+    <div style="min-width:0">
+      <div class="t">${esc(p.title)}</div>
+      <div class="meta">${esc(p.author || p.brand || "")}${p.binding ? " · "+esc(p.binding) : ""}</div>
+      <div class="asin num">${p.asin}</div>
+      ${current.matches.length ? `<div class="label" style="margin-top:8px">Other matches</div><div class="matches">${current.matches.map((m,i)=>`<button data-m="${i}">${esc(m.title)}</button>`).join("")}</div>` : ""}
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn pri" id="addInv">Add to inventory</button>
+    <button class="btn" id="clearRes">Next item</button>
+  </div>`;
+}
+function wireScan(){
+  const f = $("#scanForm");
+  f.addEventListener("submit", e => { e.preventDefault(); const v=$("#q").value; $("#q").value=""; lookup(v); });
+  $("#camBtn").addEventListener("click", openCam);
+  $("#photoIn").addEventListener("change", photoScan);
+  document.querySelectorAll("[data-cond]").forEach(b => b.onclick = () => { S.cond=b.dataset.cond; save(); if(current) current.calc=calc(current.product,current.cost); renderScan(); });
+  document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { S.mode=b.dataset.mode; save(); if(current) current.calc=calc(current.product,current.cost); renderScan(); });
+  if (!current) return;
+  const cost = $("#cost");
+  cost.addEventListener("change", () => { current.cost = parseFloat(cost.value)||0; current.calc = calc(current.product, current.cost); renderScan(); });
+  cost.addEventListener("focus", () => cost.select());
+  $("#chartBtn").onclick = () => openChart(current.product);
+  $("#clearRes").onclick = () => { current=null; renderScan(); setTimeout(()=>$("#q").focus(),0); };
+  $("#addInv").onclick = () => {
+    const p=current.product, c=current.calc;
+    S.inv.unshift({t:Date.now(), asin:p.asin, title:p.title, img:imgUrl(p), cost:current.cost||0, sell:c.sell, profit:c.profit, cond:S.cond, status:"bought"});
+    save(); toast("Added to inventory");
+  };
+  document.querySelectorAll("[data-m]").forEach(b => b.onclick = () => pick(current.matches[+b.dataset.m]));
+}
+
+/* ============ camera ============ */
+let reader = null;
+async function openCam(){
+  if (!window.ZXing){ toast("Scanner library didn't load"); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Live camera needs https. Use the photo option."); return; }
+  $("#cam").hidden = false;
+  const hints = new Map();
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.CODE_128]);
+  reader = new ZXing.BrowserMultiFormatReader(hints, 250);
+  try{
+    await reader.decodeFromConstraints({video:{facingMode:"environment"}}, "video", (res) => {
+      if (res){ closeCam(); lookup(res.getText()); }
+    });
+  }catch(e){ closeCam(); toast("Camera blocked. Allow camera access for this site."); }
+}
+function closeCam(){ if (reader){ try{ reader.reset(); }catch(e){} reader=null; } $("#cam").hidden = true; }
+$("#camClose").onclick = closeCam;
+async function photoScan(e){
+  const file = e.target.files[0]; if (!file) return;
+  const url = URL.createObjectURL(file);
+  try{
+    const r = new ZXing.BrowserMultiFormatReader();
+    const res = await r.decodeFromImageUrl(url);
+    lookup(res.getText());
+  }catch(err){ renderScan("Couldn't read a barcode in that photo. Get closer and keep it sharp."); }
+  finally{ URL.revokeObjectURL(url); }
+}
+
+/* ============ chart ============ */
+const SERIES = [
+  {key:"used",   label:"Used",    idx:2,  stride:2, color:"#e9edf1", on:true},
+  {key:"usedbb", label:"Used BB", idx:32, stride:3, color:"#2dd4bf", on:true},
+  {key:"new",    label:"New",     idx:1,  stride:2, color:"#38bdf8", on:false},
+  {key:"newbb",  label:"New BB",  idx:18, stride:3, color:"#ec4899", on:true},
+  {key:"amazon", label:"Amazon",  idx:0,  stride:2, color:"#f5a623", on:false},
+  {key:"rank",   label:"Rank",    idx:3,  stride:2, color:"#22c55e", on:true, rank:true}
+];
+let chartState = null;
+function parseSeries(p, s){
+  const a = p.csv && p.csv[s.idx]; if (!a) return [];
+  const out = [];
+  for (let i=0; i+1<a.length; i+=s.stride){
+    let v = a[i+1];
+    if (s.stride===3 && v>=0 && a[i+2]>0) v += a[i+2];
+    out.push([keepaToMs(a[i]), v<0 ? null : (s.rank ? v : v/100)]);
+  }
+  return out;
+}
+function openChart(p){
+  chartState = {p, days:90, data:SERIES.map(s => ({...s, pts:parseSeries(p,s)})), hover:null};
+  const sh = $("#sheet"); sh.hidden = false;
+  sh.innerHTML = `<div class="sheet-head"><div class="t">${esc(p.title)}</div><button class="round" style="background:var(--panel2)" id="shClose" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+  <div class="note" style="margin-top:6px">Tap or drag to inspect a date</div>
+  <div class="pillrow" id="ranges">${[30,90,180,365,0].map(d=>`<button class="pill" data-d="${d}" aria-pressed="${d===90}">${d?d+"d":"All"}</button>`).join("")}
+    <a class="pill" style="color:var(--fg);text-decoration:none" target="_blank" rel="noopener" href="https://keepa.com/#!product/1-${p.asin}">Keepa ↗</a></div>
+  <div class="pillrow" id="sers">${chartState.data.map((s,i)=>`<button class="ser" style="--c:${s.color}" data-i="${i}" aria-pressed="${s.on}">${s.label}</button>`).join("")}</div>
+  <div class="chartbox"><canvas id="cv"></canvas></div>
+  <div class="readout" id="readout">Tap or drag on the chart to inspect a date.</div>`;
+  $("#shClose").onclick = () => { sh.hidden = true; chartState = null; };
+  $("#ranges").addEventListener("click", e => { const b=e.target.closest("[data-d]"); if(!b) return; chartState.days=+b.dataset.d; document.querySelectorAll("#ranges [data-d]").forEach(x=>x.setAttribute("aria-pressed",String(x===b))); drawChart(); });
+  $("#sers").addEventListener("click", e => { const b=e.target.closest("[data-i]"); if(!b) return; const s=chartState.data[+b.dataset.i]; s.on=!s.on; b.setAttribute("aria-pressed",String(s.on)); drawChart(); });
+  const cv = $("#cv");
+  const inspect = ev => { const r=cv.getBoundingClientRect(); const x=(ev.touches?ev.touches[0].clientX:ev.clientX)-r.left; chartState.hover=x; drawChart(); };
+  cv.addEventListener("pointerdown", e => { cv.setPointerCapture(e.pointerId); inspect(e); });
+  cv.addEventListener("pointermove", e => { if (e.buttons || e.pointerType==="touch") inspect(e); });
+  cv.addEventListener("dblclick", () => { chartState.hover=null; drawChart(); $("#readout").textContent="Tap or drag on the chart to inspect a date."; });
+  drawChart();
+}
+function valueAt(pts, t){ let v=null; for (const [x,y] of pts){ if (x>t) break; v=y; } return v; }
+function drawChart(){
+  const st = chartState, cv = $("#cv"); if (!st || !cv) return;
+  const dpr = window.devicePixelRatio||1, W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W*dpr; cv.height = H*dpr;
+  const g = cv.getContext("2d"); g.scale(dpr,dpr); g.clearRect(0,0,W,H);
+  const L=50, R=52, T=12, B=26, pw=W-L-R, ph=H-T-B;
+  const now = Date.now();
+  let t0 = st.days ? now - st.days*864e5 : Math.min(...st.data.flatMap(s=>s.pts.length?[s.pts[0][0]]:[now-365*864e5]));
+  const vis = st.data.filter(s=>s.on);
+  const clip = s => { const pre = valueAt(s.pts,t0); const pts = s.pts.filter(([x])=>x>=t0); if (pre!=null) pts.unshift([t0,pre]); if (pts.length) pts.push([now, pts[pts.length-1][1]]); return pts; };
+  const series = vis.map(s => ({...s, cp:clip(s)}));
+  const prices = series.filter(s=>!s.rank).flatMap(s=>s.cp.map(p=>p[1])).filter(v=>v!=null);
+  const ranks  = series.filter(s=>s.rank).flatMap(s=>s.cp.map(p=>p[1])).filter(v=>v!=null);
+  const pMax = prices.length ? Math.max(...prices)*1.08 : 1, pMin = 0;
+  const rMin = ranks.length ? Math.min(...ranks)*0.92 : 0, rMax = ranks.length ? Math.max(...ranks)*1.05 : 1;
+  const X = t => L + (t-t0)/(now-t0)*pw;
+  const YP = v => T + ph - (v-pMin)/(pMax-pMin||1)*ph;
+  const YR = v => T + ph - (v-rMin)/(rMax-rMin||1)*ph;   // higher on chart = worse rank, like Keepa's scale here
+  g.font = "12px JetBrains Mono, monospace"; g.textBaseline="middle";
+  g.strokeStyle = "#2f3740"; g.lineWidth = 1;
+  for (let i=0;i<=2;i++){
+    const y = T + ph*i/2; g.beginPath(); g.moveTo(L,y); g.lineTo(L+pw,y); g.stroke();
+    g.fillStyle="#8d98a4"; g.textAlign="right"; g.fillText(money(pMax-(pMax-pMin)*i/2), L-6, y);
+    if (ranks.length){ g.fillStyle="#22c55e"; g.textAlign="left"; g.fillText(kfmt(Math.round(rMax-(rMax-rMin)*i/2)), L+pw+6, y); }
+  }
+  // month ticks
+  g.fillStyle="#8d98a4"; g.textAlign="center"; g.textBaseline="top";
+  const d = new Date(t0); d.setDate(1); d.setHours(0,0,0,0); d.setMonth(d.getMonth()+1);
+  const step = (now-t0) > 400*864e5 ? 3 : 1;
+  for (; d.getTime()<now; d.setMonth(d.getMonth()+step)){
+    const x = X(d.getTime()); g.strokeStyle="#2f3740"; g.beginPath(); g.moveTo(x,T); g.lineTo(x,T+ph); g.stroke();
+    g.fillText(d.toLocaleString("en-US",{month:"short"}) + (step>1?" '"+String(d.getFullYear()).slice(2):""), x, T+ph+6);
+  }
+  // lines (step style, like Keepa)
+  for (const s of series){
+    g.strokeStyle = s.color; g.lineWidth = 2; g.setLineDash(s.rank ? [6,5] : []);
+    const Y = s.rank ? YR : YP; g.beginPath(); let pen=false, lastY=null;
+    for (const [t,v] of s.cp){
+      if (v==null){ pen=false; continue; }
+      const x=X(t), y=Y(v);
+      if (!pen){ g.moveTo(x,y); pen=true; } else { g.lineTo(x,lastY); g.lineTo(x,y); }
+      lastY=y;
+    }
+    g.stroke();
+  }
+  g.setLineDash([]);
+  if (!series.some(s=>s.cp.some(p=>p[1]!=null))){ g.fillStyle="#8d98a4"; g.textAlign="center"; g.textBaseline="middle"; g.fillText("No history for these series", L+pw/2, T+ph/2); }
+  // inspector
+  if (st.hover!=null){
+    const x = Math.max(L, Math.min(L+pw, st.hover)); const t = t0 + (x-L)/pw*(now-t0);
+    g.strokeStyle="#f5a623"; g.beginPath(); g.moveTo(x,T); g.lineTo(x,T+ph); g.stroke();
+    const parts = series.map(s => { const v=valueAt(s.cp,t); return `<span style="color:${s.color}">${s.label} ${s.rank ? kfmt(v) : money(v)}</span>`; });
+    $("#readout").innerHTML = `<b style="color:var(--fg)">${new Date(t).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</b> · ` + parts.join(" · ");
+  }
+}
+window.addEventListener("resize", () => chartState && drawChart());
+
+/* ============ history / inventory ============ */
+function renderHistory(){
+  const h = S.history;
+  $("#main").innerHTML = `<div class="row"><h2 class="grow">Scan history</h2>${h.length?'<button class="mini" id="clrH">Clear</button>':""}</div>` +
+    (h.length ? h.map((x,i)=>`<div class="card"><div class="row">
+      ${x.img?`<img src="${x.img}" alt="" style="width:40px;height:52px;object-fit:contain;background:#fff;border-radius:5px">`:""}
+      <div class="grow"><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(x.title)}</div>
+      <div class="note num">${x.asin} · rank ${kfmt(x.rank)} · pulse ${x.pulse} · ${new Date(x.t).toLocaleDateString()}</div></div>
+      <div style="text-align:right"><span class="tag ${x.buy?"buy":"skip"}">${x.buy?"BUY":"SKIP"}</span><div class="num" style="margin-top:4px">${money(x.profit)}</div></div>
+    </div><button class="mini" data-re="${i}" style="margin-top:8px">Rescan</button></div>`).join("")
+    : `<div class="empty"><b>Nothing yet</b>Every lookup lands here.</div>`);
+  const c = $("#clrH"); if (c) c.onclick = () => { if (c.dataset.sure){ S.history=[]; save(); renderHistory(); } else { c.dataset.sure="1"; c.textContent="Tap again to clear"; } };
+  document.querySelectorAll("[data-re]").forEach(b => b.onclick = () => { const a=S.history[+b.dataset.re].asin; setTab("scan"); lookup(a); });
+}
+function renderInventory(){
+  const v = S.inv;
+  const tot = v.reduce((a,x)=>({cost:a.cost+(x.cost||0), profit:a.profit+(x.profit||0)}),{cost:0,profit:0});
+  $("#main").innerHTML = `<h2>Inventory</h2>
+    <div class="stats" style="margin:0 0 12px"><div><div class="v num">${v.length}</div><small>Units</small></div><div><div class="v num">${money(tot.cost)}</div><small>Spent</small></div><div><div class="v num">${money(tot.profit)}</div><small>Est. profit</small></div></div>` +
+    (v.length ? v.map((x,i)=>`<div class="card"><div class="row">
+      <div class="grow"><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(x.title)}</div>
+      <div class="note num">${x.asin} · ${x.cond} · cost ${money(x.cost)} · list ${money(x.sell)}</div></div>
+      <div class="num" style="font-weight:700;color:${(x.profit||0)>=0?"var(--buy)":"var(--skip)"}">${money(x.profit)}</div>
+    </div><div class="row" style="margin-top:8px;gap:6px">
+      <select data-st="${i}" style="width:auto;padding:5px 8px">${["bought","listed","shipped to FBA","sold"].map(s=>`<option ${x.status===s?"selected":""}>${s}</option>`).join("")}</select>
+      <button class="mini" data-del="${i}">Remove</button></div></div>`).join("")
+    : `<div class="empty"><b>Empty</b>Tap "Add to inventory" after a BUY.</div>`);
+  document.querySelectorAll("[data-st]").forEach(s => s.onchange = () => { S.inv[+s.dataset.st].status = s.value; save(); });
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = () => { if (b.dataset.sure){ S.inv.splice(+b.dataset.del,1); save(); renderInventory(); } else { b.dataset.sure="1"; b.textContent="Tap again"; } });
+}
+
+/* ============ settings ============ */
+function renderSettings(){
+  $("#main").innerHTML = `<h2>Settings</h2>
+  <div class="card">
+    <div class="field">Keepa API key<input id="key" type="password" value="${esc(S.key)}" placeholder="Paste your key" autocomplete="off"></div>
+    <div class="note" style="margin-top:6px">Stored only on this phone. Each scan uses about 1 token, plus 2 with buy box on.</div>
+    <div class="row" style="margin-top:10px"><span class="grow">Buy box prices (+2 tokens)</span><label class="switch"><input type="checkbox" id="bb" ${S.buybox?"checked":""}><span></span></label></div>
+  </div>
+  <div class="card"><div class="label" style="margin-bottom:8px">Costs</div>
+    <div class="trig-grid">
+      <label>Inbound ship $/lb<input id="inb" inputmode="decimal" value="${S.inbound}"></label>
+      <label>Prep per unit $<input id="prep" inputmode="decimal" value="${S.prep}"></label>
+      <label>Default buy cost $<input id="dc" inputmode="decimal" value="${S.defCost}"></label>
+    </div>
+  </div>
+  <div class="row" style="margin:14px 0 6px"><h2 class="grow" style="margin:0">FBA triggers</h2><span class="note">${S.mode==="triggers"?"Active":"Off (EV mode)"}</span></div>
+  <div class="note" style="margin-bottom:8px">Checked top to bottom. First trigger whose rank and pulse match decides. Red = always skip.</div>
+  <div id="trigs">${S.triggers.map((t,i)=>`<div class="card trig ${t.color==="green"?"":t.color}">
+    <div class="row"><input class="grow" data-f="name" data-i="${i}" value="${esc(t.name)}" style="font-weight:700">
+      <label class="switch"><input type="checkbox" data-f="on" data-i="${i}" ${t.on?"checked":""}><span></span></label></div>
+    <div class="trig-grid">
+      <label>Rank<span class="pair"><input inputmode="numeric" data-f="rMin" data-i="${i}" value="${t.rMin}"><input inputmode="numeric" data-f="rMax" data-i="${i}" value="${t.rMax}"></span></label>
+      <label>Pulse (6m)<span class="pair"><input inputmode="numeric" data-f="pMin" data-i="${i}" value="${t.pMin}"><input inputmode="numeric" data-f="pMax" data-i="${i}" value="${t.pMax}"></span></label>
+      <label>Min profit $<input inputmode="decimal" data-f="minProfit" data-i="${i}" value="${t.minProfit}"></label>
+      <label>Type<select data-f="color" data-i="${i}">${["green","yellow","red"].map(c=>`<option value="${c}" ${t.color===c?"selected":""}>${{green:"Buy",yellow:"Check",red:"Exclude"}[c]}</option>`).join("")}</select></label>
+    </div>
+    <div class="row" style="margin-top:8px;gap:6px"><button class="mini" data-up="${i}">Move up</button><button class="mini" data-rm="${i}">Delete</button></div>
+  </div>`).join("")}</div>
+  <div class="row" style="gap:8px"><button class="btn" id="addT" style="flex:1">Add trigger</button><button class="btn" id="resetT" style="flex:1">Reset to defaults</button></div>
+
+  <div class="row" style="margin:18px 0 6px"><h2 class="grow" style="margin:0">How often it sells</h2><span class="note">${S.mode==="ev"?"Active":"Off (trigger mode)"}</span></div>
+  <div class="note" style="margin-bottom:8px">Expected = profit × share sold within 6 months. BUY when expected is at least the amount in its row. Leave blank to pass on that speed.</div>
+  <div class="card" style="overflow-x:auto"><table class="ev"><tr><td></td><td class="label" style="text-align:center">% sold 6m</td><td class="label" style="text-align:center">Keep $</td></tr>
+  ${S.ev.map((r,i)=>`<tr><td>${r.label}<small>${r.sub}</small></td>
+    <td style="width:74px"><input inputmode="numeric" data-ev="pct" data-i="${i}" value="${r.pct}"></td>
+    <td style="width:84px"><input inputmode="decimal" data-ev="keep" data-i="${i}" value="${r.keep??""}" placeholder="Pass"></td></tr>`).join("")}
+  </table></div>`;
+  const num = (el, d=0) => { const v=parseFloat(el.value); return isNaN(v)?d:v; };
+  $("#key").onchange = e => { S.key = e.target.value.trim(); save(); toast("Key saved"); };
+  $("#bb").onchange = e => { S.buybox = e.target.checked; save(); };
+  $("#inb").onchange = e => { S.inbound = num(e.target, .4); save(); };
+  $("#prep").onchange = e => { S.prep = num(e.target); save(); };
+  $("#dc").onchange = e => { S.defCost = num(e.target); save(); };
+  document.querySelectorAll("[data-f]").forEach(el => el.onchange = () => {
+    const t = S.triggers[+el.dataset.i], f = el.dataset.f;
+    t[f] = f==="on" ? el.checked : (f==="name"||f==="color") ? el.value : num(el);
+    save(); if (f==="color") renderSettings();
+  });
+  document.querySelectorAll("[data-ev]").forEach(el => el.onchange = () => {
+    const r = S.ev[+el.dataset.i];
+    if (el.dataset.ev==="keep") r.keep = el.value.trim()==="" ? null : num(el); else r.pct = num(el);
+    save();
+  });
+  document.querySelectorAll("[data-up]").forEach(b => b.onclick = () => { const i=+b.dataset.up; if(i>0){ [S.triggers[i-1],S.triggers[i]]=[S.triggers[i],S.triggers[i-1]]; save(); renderSettings(); } });
+  document.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { if (b.dataset.sure){ S.triggers.splice(+b.dataset.rm,1); save(); renderSettings(); } else { b.dataset.sure="1"; b.textContent="Tap again"; } });
+  $("#addT").onclick = () => { S.triggers.push({name:"New trigger",on:true,color:"green",rMin:1,rMax:500000,pMin:1,pMax:186,minProfit:5}); save(); renderSettings(); };
+  $("#resetT").onclick = e => { const b=e.target; if (b.dataset.sure){ S.triggers=JSON.parse(JSON.stringify(DEFAULT_TRIGGERS)); S.ev=JSON.parse(JSON.stringify(DEFAULT_EV)); save(); renderSettings(); } else { b.dataset.sure="1"; b.textContent="Tap again to reset"; } };
+}
+
+setTab("scan");
+</script>
+</body>
+</html>
