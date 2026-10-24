@@ -441,28 +441,42 @@ function decodeCanvas(cv){
   }
   return null;
 }
+function freshVideo(){
+  // iPhone Safari often freezes a <video> that is reused after its stream is detached, so swap in a new one each time
+  const old = $("#video"), v = document.createElement("video");
+  v.id = "video"; v.autoplay = true; v.muted = true; v.playsInline = true;
+  v.setAttribute("autoplay",""); v.setAttribute("muted",""); v.setAttribute("playsinline","");
+  old.replaceWith(v);
+  return v;
+}
+const streamLive = () => stream && stream.getVideoTracks().some(t => t.readyState === "live");
 async function openCam(){
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Live camera needs https. Use the photo option."); return; }
   if (!window.ZXing && !("BarcodeDetector" in window)){ toast("Scanner library didn't load. Reload the page."); return; }
-  if ("BarcodeDetector" in window){
-    try { native = new BarcodeDetector({formats:["ean_13","upc_a","ean_8","upc_e","code_128"]}); } catch(e){ native = null; }
+  if (native === null && "BarcodeDetector" in window){
+    try { native = new BarcodeDetector({formats:["ean_13","upc_a","ean_8","upc_e","code_128"]}); } catch(e){ native = false; }
   }
-  const video = $("#video");
-  video.setAttribute("autoplay",""); video.setAttribute("playsinline",""); video.muted = true;
+  clearTimeout(camTimer); camTimer = null;
   $("#cam").hidden = false;
-  try{
-    stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}}});
-  }catch(e){ closeCam(); toast("Camera blocked. Settings > Safari > Camera > Allow."); return; }
+  $("#camHint").textContent = "Point at the barcode";
+  // keep the camera stream between scans: faster, no re-prompt, avoids the iOS second-open freeze
+  if (!streamLive()){
+    if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}}});
+    }catch(e){ stopStream(); $("#cam").hidden = true; toast("Camera blocked. Settings > Safari > Camera > Allow."); return; }
+    try { const tr = stream.getVideoTracks()[0]; const caps = tr.getCapabilities ? tr.getCapabilities() : {};
+          if (caps.focusMode && caps.focusMode.includes("continuous")) await tr.applyConstraints({advanced:[{focusMode:"continuous"}]}); } catch(e){}
+  }
+  const video = freshVideo();
   video.srcObject = stream;
   try { await video.play(); } catch(e){}
-  try { const tr = stream.getVideoTracks()[0]; const caps = tr.getCapabilities ? tr.getCapabilities() : {};
-        if (caps.focusMode && caps.focusMode.includes("continuous")) await tr.applyConstraints({advanced:[{focusMode:"continuous"}]}); } catch(e){}
+  const session = ++camSession;
   const cv = document.createElement("canvas"), g = cv.getContext("2d", {willReadFrequently:true});
-  let busyFrame = false, n = 0;
+  let n = 0;
   const tick = async () => {
-    if (!stream) return;
-    if (!busyFrame && video.readyState >= 2 && video.videoWidth){
-      busyFrame = true;
+    if (session !== camSession || $("#cam").hidden || !streamLive()) return;
+    if (video.readyState >= 2 && video.videoWidth){
       const vw = video.videoWidth, vh = video.videoHeight;
       // center band: 80% wide, 35% tall (barcodes are wide)
       const cw = Math.round(vw*0.8), ch = Math.round(vh*0.35), cx = Math.round((vw-cw)/2), cy = Math.round((vh-ch)/2);
@@ -473,22 +487,28 @@ async function openCam(){
       try{
         if (native){ const r = await native.detect(cv); if (r && r.length) code = r[0].rawValue; }
         else if (window.ZXing) code = decodeCanvas(cv);
-      }catch(e){}
-      busyFrame = false;
+      }catch(e){ zx = null; }   // rebuild the decoder if it ever gets into a bad state
+      if (session !== camSession) return;
       if (code){ closeCam(); if (navigator.vibrate) navigator.vibrate(40); lookup(code); return; }
       if (++n === 40) $("#camHint").textContent = "Hold steady, fill the box with the barcode, avoid glare";
-    }
+    } else if (video.paused) { try { await video.play(); } catch(e){} }
     camTimer = setTimeout(tick, 120);
   };
   tick();
 }
+let camSession = 0;
 function closeCam(){
+  camSession++;
   clearTimeout(camTimer); camTimer = null;
-  if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
-  const v = $("#video"); v.srcObject = null;
-  $("#camHint").textContent = "Point at the barcode";
+  const v = $("#video"); try { v.pause(); } catch(e){}
   $("#cam").hidden = true;
 }
+function stopStream(){
+  if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+  const v = $("#video"); if (v) v.srcObject = null;
+}
+// release the camera when the app goes to the background
+document.addEventListener("visibilitychange", () => { if (document.hidden){ closeCam(); stopStream(); } });
 $("#camClose").onclick = closeCam;
 async function photoScan(e){
   const file = e.target.files[0]; e.target.value = ""; if (!file) return;
