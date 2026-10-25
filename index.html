@@ -143,6 +143,10 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .camres .t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .camres .s{font-size:13px;font-weight:600;opacity:.85}
 .cam-bar .btn{padding:9px 12px;font-size:14px}
+.cam-bar{flex-wrap:wrap}
+#camHint{flex-basis:100%;font-size:14px}
+#cam.text .reticle{top:41%;height:18%;left:5%;right:5%}
+#modeBtn[data-mode="text"]{background:var(--blue);color:#06202c;border-color:var(--blue)}
 #contBtn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .cam-bar{gap:8px;display:flex;justify-content:space-between;align-items:center;padding:14px max(16px,env(safe-area-inset-left,0px)) calc(14px + env(safe-area-inset-bottom,0px));background:#000;color:#fff}
 
@@ -202,6 +206,7 @@ table.ev small{color:var(--muted);display:block}
   <div class="reticle"></div>
   <button class="camres" id="camRes" hidden></button>
   <div class="cam-bar"><span id="camHint" style="flex:1">Point at the barcode</span>
+    <button class="btn" id="modeBtn" data-mode="barcode">Barcode</button>
     <button class="btn" id="contBtn" aria-pressed="false">Continuous: Off</button>
     <button class="btn" id="camClose">Done</button></div>
 </div>
@@ -253,6 +258,7 @@ const S = {
   buybox:   LS.get("buybox", true),        // costs +2 Keepa tokens
   autoOffers: LS.get("autoOffers", false),
   cont:     LS.get("cont", false),         // continuous scan
+  camMode:  LS.get("camMode", "barcode"),  // barcode | text (live ISBN reading)
   ladder:   LS.get("ladder", true),        // triggers fall through to slower tiers
   roi:      LS.get("roi", {minProfit:5, minRoi:50, maxRank:6000000, minPulse:6}), // live offers cost ~12 tokens per scan
   history:  LS.get("history", []),
@@ -269,7 +275,7 @@ if (!LS.get("addedSlow", false)){
   }
   LS.set("addedSlow", true); LS.set("triggers", S.triggers);
 }
-function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
 
 /* ============ helpers ============ */
 const $ = s => document.querySelector(s);
@@ -597,11 +603,11 @@ document.getElementById("tabs").addEventListener("click", e => { const b=e.targe
 function scanBar(){
   return `<form class="scanbar" id="scanForm" autocomplete="off">
     <input id="q" inputmode="text" placeholder="ISBN, UPC, ASIN or a title" enterkeyhint="search" aria-label="ISBN, UPC, ASIN or title">
-    <button class="round vis" type="button" id="visBtn" aria-label="Visual scan: photo of cover or copyright page"><svg viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4z"/><path d="M20 5h-6a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h6z"/></svg></button>
+    <button class="round vis" type="button" id="visBtn" aria-label="Read the ISBN with the camera"><svg viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4z"/><path d="M20 5h-6a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h6z"/></svg></button>
     <input type="file" accept="image/*" capture="environment" id="visIn" hidden>
     <button class="round cam" type="button" id="camBtn" aria-label="Scan with camera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
   </form>
-  <label class="note" style="display:block;margin-top:6px">No live camera? <input type="file" accept="image/*" capture="environment" id="photoIn" style="width:auto;border:0;padding:0;font-size:13px"></label>`;
+  <label class="note" style="display:block;margin-top:6px">Or use a photo (barcode or ISBN page): <input type="file" accept="image/*" capture="environment" id="photoIn" style="width:auto;border:0;padding:0;font-size:13px"></label>`;
 }
 function renderScan(err){
   if (tab !== "scan") return;
@@ -678,10 +684,10 @@ function resultHTML(){
 function wireScanBar(){
   const f = $("#scanForm");
   f.addEventListener("submit", e => { e.preventDefault(); const v=$("#q").value; $("#q").value=""; isCode(v) ? lookup(v) : titleSearch(v); });
-  $("#visBtn").addEventListener("click", () => $("#visIn").click());
+  $("#visBtn").addEventListener("click", () => openCam("text"));
   $("#visIn").addEventListener("change", visualScan);
   $("#camBtn").addEventListener("click", openCam);
-  $("#photoIn").addEventListener("change", photoScan);
+  $("#photoIn").addEventListener("change", visualScan);
   const c = $("#cancelLookup"); if (c) c.onclick = () => { if (lookupCtl) lookupCtl.abort(); lookupCtl = null; busy = false; renderScan("Lookup canceled."); };
 }
 function wireScan(){
@@ -718,17 +724,63 @@ function validIsbn(d){
   if (d.length === 10 && /^[0-9]{9}[0-9X]$/.test(d)){ let s=0; for (let i=0;i<10;i++) s += (d[i]==="X"?10:+d[i])*(10-i); return s%11 === 0; }
   return false;
 }
-function findIsbn(text){
-  // fix common OCR swaps inside number runs, then test every 10/13-char window
-  // (no lookbehind regex: older iPhones can't parse it)
-  const t = text.toUpperCase().replace(/[0-9OIL|X][0-9OIL|X\s-]{8,}[0-9OIL|X]/g, run => /[0-9]{4}/.test(run) ? run.replace(/O/g,"0").replace(/[IL|]/g,"1") : run);
-  const runs = t.match(/[0-9X][0-9X\s-]{8,20}[0-9X]/g) || [];
-  for (const r of runs){
-    const d = r.replace(/[\s-]/g,"");
-    for (const len of [13,10]) for (let i=0; i+len<=d.length; i++){ const w = d.slice(i,i+len); if (validIsbn(w)) return w; }
+// Digits phone OCR commonly confuses, used to suggest a fix when the check digit fails
+const CONF = {"0":"896","1":"7","2":"7","3":"8","4":"9","5":"68","6":"508","7":"12","8":"3609","9":"840"};
+const LETTER = {O:"0",Q:"0",D:"0",I:"1",L:"1","|":"1","!":"1","]":"1","[":"1",S:"5",B:"8",Z:"2",G:"6",T:"7"};
+function normRun(r){
+  // returns digits plus which digits were letters in the photo (the likeliest misreads)
+  let d = "", guess = [];
+  for (const ch of r.toUpperCase()){
+    if (/[0-9X]/.test(ch)){ d += ch; guess.push(false); }
+    else if (LETTER[ch]){ d += LETTER[ch]; guess.push(true); }
   }
-  return null;
+  return {d, guess};
 }
+function repairs(w, guess){
+  // try the spots that were letters first, then the check digit, then everything else
+  const start = w.length === 13 ? 3 : 0, idx = [];
+  for (let i = start; i < w.length; i++) idx.push(i);
+  const tryAt = list => { const out = [];
+    for (const i of list){
+      const alts = (guess && guess[i] ? "0123456789" : (CONF[w[i]] || "")) + (w.length === 10 && i === 9 ? "X" : "");
+      for (const a of alts){ if (a === w[i]) continue; const t = w.slice(0,i) + a + w.slice(i+1); if (validIsbn(t) && !out.includes(t)) out.push(t); }
+    }
+    return out; };
+  const letterSpots = idx.filter(i => guess && guess[i]);
+  if (letterSpots.length){ const r = tryAt(letterSpots); if (r.length) return r.slice(0,3); }
+  const last = tryAt([w.length-1]); if (last.length) return last;
+  return tryAt(idx.slice(0,-1)).slice(0,3);
+}
+function isbnCandidates(text){
+  const t = String(text||"").toUpperCase()
+    .replace(/[‐-―−­]/g,"-")                       // every kind of dash
+    .replace(/I?[S5] ?[B8] ?N[ \t]*(-? ?1[03])?[ \t]*[:.]?/g," @@ ")    // mark the "ISBN" / "ISBN-13:" label
+    .replace(/[A-Z|!\[\]]{2,}/g," ## ");                                // whole words aren't misread digits; only lone letters are
+  const re = /[0-9OQDILSBZGT|!\[\]][0-9OQDILSBZGTX|!\[\] \t.:,-]{7,28}[0-9OQDILSBZGTX|!\[\]]/g;   // one line at a time
+  const exact = [], fixes = [];
+  const add = (list, v) => { if (!list.includes(v)) list.push(v); };
+  let m;
+  while ((m = re.exec(t))){
+    const raw = m[0];
+    const labeled = /@@[ \t]*$/.test(t.slice(Math.max(0, m.index-6), m.index));   // sits right after "ISBN"
+    if ((raw.match(/[0-9]/g)||[]).length < 7) continue;               // mostly words, not a number
+    let {d, guess} = normRun(raw);
+    while (d.indexOf("X") > -1 && d.indexOf("X") < d.length-1){ const k = d.indexOf("X"); d = d.slice(0,k)+d.slice(k+1); guess.splice(k,1); }
+    for (let i = 0; i+13 <= d.length; i++){
+      const w = d.slice(i, i+13);
+      if (!/^97[89]/.test(w)) continue;
+      if (validIsbn(w)) add(exact, w); else repairs(w, guess.slice(i,i+13)).forEach(x => add(fixes, x));
+    }
+    if (labeled && (d.length === 10 || d.length === 11)){               // 10-digit only right after "ISBN", so phone numbers and LCCNs don't match
+      for (const [w, g] of [[d.slice(0,10), guess.slice(0,10)], [d.slice(-10), guess.slice(-10)]]){
+        if (validIsbn(w)) add(exact, w); else if (d.length === 10) repairs(w, g).forEach(x => add(fixes, x));
+      }
+    }
+  }
+  exact.sort((a,b) => b.length - a.length);                             // prefer 13-digit
+  return {exact, fixes: fixes.filter(f => !exact.includes(f)).slice(0,4)};
+}
+function findIsbn(text){ return isbnCandidates(text).exact[0] || null; }
 function guessTitle(data){
   const lines = (data.lines || []).map(l => ({text:l.text.trim(), h:l.bbox.y1-l.bbox.y0, y:l.bbox.y0, conf:l.confidence}))
     .filter(l => { const letters = (l.text.match(/[A-Za-z]/g)||[]).length; return letters >= 3 && letters/l.text.length > .6 && l.conf > 45; });
@@ -737,6 +789,13 @@ function guessTitle(data){
   const big = [...lines].filter(l => l.h >= maxH*.45).sort((a,b) => b.h-a.h).slice(0,4).sort((a,b) => a.y-b.y);   // biggest text, read top to bottom
   return big.map(l => l.text).join(" ").replace(/[^A-Za-z0-9'&: ]+/g," ").replace(/\s+/g," ").trim().slice(0,80);
 }
+let ocrParams = "default";
+async function ocrMode(w, kind){
+  if (ocrParams === kind) return;
+  if (kind === "digits") await w.setParameters({tessedit_char_whitelist:"0123456789Xx-ISBN: ", tessedit_pageseg_mode:"6"});
+  else await w.setParameters({tessedit_char_whitelist:"", tessedit_pageseg_mode:"3"});
+  ocrParams = kind;
+}
 async function getOcr(onPct){
   if (!window.Tesseract){
     await new Promise((ok, bad) => { const sc = document.createElement("script");
@@ -744,39 +803,111 @@ async function getOcr(onPct){
       document.head.appendChild(sc); });
   }
   if (!ocrWorker){
+    ocrParams = "default";
     ocrWorker = await Tesseract.createWorker("eng", 1, {logger: m => { if (m.status === "recognizing text") onPct(Math.round(m.progress*100)); }});
   }
   return ocrWorker;
 }
-async function prepImage(file){
-  const bmp = await createImageBitmap(file);
-  const s = Math.min(1, 2000/Math.max(bmp.width,bmp.height));
-  const cv = document.createElement("canvas"); cv.width = Math.round(bmp.width*s); cv.height = Math.round(bmp.height*s);
-  const g = cv.getContext("2d", {willReadFrequently:true}); g.drawImage(bmp,0,0,cv.width,cv.height);
-  // grayscale + stretch contrast helps the reader a lot on glossy covers
-  const im = g.getImageData(0,0,cv.width,cv.height), d = im.data; let mn=255, mx=0;
+function canvasOf(w, h){ const c = document.createElement("canvas"); c.width = Math.max(1,Math.round(w)); c.height = Math.max(1,Math.round(h)); return c; }
+function grayInPlace(cv){
+  const g = cv.getContext("2d", {willReadFrequently:true}), im = g.getImageData(0,0,cv.width,cv.height), d = im.data; let mn=255, mx=0;
   for (let i=0;i<d.length;i+=4){ const v = d[i]*.299+d[i+1]*.587+d[i+2]*.114; d[i]=v; if (v<mn) mn=v; if (v>mx) mx=v; }
   const k = 255/Math.max(1,mx-mn);
   for (let i=0;i<d.length;i+=4){ const v = (d[i]-mn)*k; d[i]=d[i+1]=d[i+2]=v; }
-  g.putImageData(im,0,0);
-  return cv;
+  g.putImageData(im,0,0); return cv;
+}
+function binarize(src){
+  // Otsu threshold: pure black text on white, which the reader handles best
+  const cv = canvasOf(src.width, src.height), g = cv.getContext("2d", {willReadFrequently:true});
+  g.drawImage(src,0,0); const im = g.getImageData(0,0,cv.width,cv.height), d = im.data, hist = new Array(256).fill(0);
+  for (let i=0;i<d.length;i+=4) hist[d[i]|0]++;
+  const total = d.length/4; let sum=0; for (let i=0;i<256;i++) sum += i*hist[i];
+  let sB=0, wB=0, best=0, th=128;
+  for (let i=0;i<256;i++){ wB += hist[i]; if (!wB) continue; const wF = total-wB; if (!wF) break; sB += i*hist[i];
+    const mB = sB/wB, mF = (sum-sB)/wF, between = wB*wF*(mB-mF)*(mB-mF); if (between > best){ best = between; th = i; } }
+  for (let i=0;i<d.length;i+=4){ const v = d[i] > th ? 255 : 0; d[i]=d[i+1]=d[i+2]=v; }
+  g.putImageData(im,0,0); return cv;
+}
+async function prepImage(file){
+  const bmp = await createImageBitmap(file);
+  const long = Math.max(bmp.width, bmp.height);
+  const s = long > 2600 ? 2600/long : long < 1800 ? 1800/long : 1;      // small text needs pixels; huge photos are slow
+  const color = canvasOf(bmp.width*s, bmp.height*s); color.getContext("2d").drawImage(bmp,0,0,color.width,color.height);
+  const gray = canvasOf(color.width, color.height); gray.getContext("2d").drawImage(color,0,0); grayInPlace(gray);
+  return {color, gray};
+}
+async function barcodeIn(src){
+  const s = Math.min(1, 1600/Math.max(src.width,src.height)), cv = canvasOf(src.width*s, src.height*s);
+  cv.getContext("2d").drawImage(src,0,0,cv.width,cv.height);
+  try{ if ("BarcodeDetector" in window){ const r = await new BarcodeDetector().detect(cv); const hit = r.find(x => /^[0-9]{8,14}$/.test(x.rawValue)); if (hit) return hit.rawValue; } }catch(e){}
+  try{ if (window.ZXing) return decodeCanvas(cv); }catch(e){}
+  return null;
+}
+function isbnBand(data, gray){
+  // crop the line(s) around the word "ISBN" and blow them up for a numbers-only read
+  const w = (data.words || []).find(x => /[S5][B8]N/.test((x.text||"").toUpperCase()));
+  if (!w) return null;
+  const h = Math.max(8, w.bbox.y1 - w.bbox.y0);
+  const y0 = Math.max(0, w.bbox.y0 - h*1.2), y1 = Math.min(gray.height, w.bbox.y1 + h*1.2);
+  const x0 = Math.max(0, w.bbox.x0 - h*2);
+  const k = Math.min(4, Math.max(1, 48/h));
+  const cv = canvasOf((gray.width-x0)*k, (y1-y0)*k);
+  const g = cv.getContext("2d"); g.imageSmoothingQuality = "high";
+  g.drawImage(gray, x0, y0, gray.width-x0, y1-y0, 0, 0, cv.width, cv.height);
+  return binarize(cv);
+}
+function setStage(label, pct){ if (!visual) return; visual.label = label; if (pct != null) visual.pct = pct;
+  const l = $("#visStage"), b = $("#visPct"); if (l) l.textContent = label; if (b && pct != null) b.style.width = pct+"%"; }
+// extra "try harder" passes get a hard time limit; a stuck reader is thrown away and rebuilt next time
+async function capped(promise, ms){
+  let timer; const out = await Promise.race([promise, new Promise(ok => { timer = setTimeout(() => ok("timeout"), ms); })]);
+  clearTimeout(timer);
+  if (out === "timeout"){ try { const w = ocrWorker; ocrWorker = null; if (w) w.terminate(); } catch(e){} return null; }
+  return out;
 }
 async function visualScan(e){
   const file = e.target.files[0]; e.target.value = ""; if (!file) return;
   if (!S.key){ renderScan("Add your Keepa API key in Settings first."); return; }
   const img = URL.createObjectURL(file);
-  visual = {stage:"reading", pct:0, img}; renderScan();
+  visual = {stage:"reading", pct:0, img, label:"Looking for a barcode…"}; renderScan();
+  const fixes = []; let raw = "", title = "";
+  const done = code => { visual = null; lookup(code); };
   try{
-    const cv = await prepImage(file);
-    const w = await getOcr(p => { if (visual){ visual.pct = p; const b = $("#visPct"); if (b) b.style.width = p+"%"; } });
-    if (!visual) return;
-    const {data} = await w.recognize(cv, {rotateAuto:true});
-    if (!visual) return;
-    const isbn = findIsbn(data.text || "");
-    if (isbn){ visual = null; lookup(isbn); return; }
-    visual = {stage:"confirm", img, term:guessTitle(data), note:"No ISBN found, so here's the title it read. Fix it if needed."};
+    const {color, gray} = await prepImage(file);
+    // 1) a barcode anywhere in the photo beats reading text
+    const bc = await barcodeIn(color); if (!visual) return;
+    if (bc){ done(bc); return; }
+    // 2) normal read of the whole photo
+    let pass = 1;
+    const w = await getOcr(p => setStage(`Reading text (step ${pass} of 3)…`, p));
+    await ocrMode(w, "default");
+    setStage("Reading text (step 1 of 3)…", 0);
+    let r = await w.recognize(gray, {rotateAuto:true}); if (!visual) return;
+    raw = r.data.text || ""; title = guessTitle(r.data);
+    let c = isbnCandidates(raw); if (c.exact.length){ done(c.exact[0]); return; }
+    fixes.push(...c.fixes);
+    // 3) zoom in on the ISBN line and read numbers only
+    const band = isbnBand(r.data, gray);
+    if (band){
+      pass = 2; setStage("Zooming in on the ISBN (step 2 of 3)…", 0);
+      const rb = await capped((async () => {
+        await ocrMode(w, "digits");
+        try { return await w.recognize(band); } finally { await ocrMode(w, "default"); }
+      })(), 8000);
+      if (!visual) return;
+      if (rb){ c = isbnCandidates(rb.data.text); if (c.exact.length){ done(c.exact[0]); return; }
+        fixes.push(...c.fixes); raw += "\n" + (rb.data.text||""); }
+    }
+    // 4) high-contrast black and white read of the whole photo
+    if (ocrWorker){
+      pass = 3; setStage("Trying high contrast (step 3 of 3)…", 0);
+      const rc = await capped(ocrWorker.recognize(binarize(gray)), 8000); if (!visual) return;
+      if (rc){ c = isbnCandidates(rc.data.text); if (c.exact.length){ done(c.exact[0]); return; } fixes.push(...c.fixes); }
+    }
+    visual = {stage:"confirm", img, term:title, raw, fixes:[...new Set(fixes)].slice(0,4),
+      note:"Couldn't read a clear ISBN. For best results, fill the frame with the ISBN line, hold steady, avoid glare. You can also type the ISBN or title below."};
   }catch(err){
-    visual = {stage:"confirm", img, term:"", note:"", err:(err && err.message) || "Couldn't read that photo."};
+    visual = {stage:"confirm", img, term:title, raw, fixes:[...new Set(fixes)].slice(0,4), err:(err && err.message) || "Couldn't read that photo."};
   }
   renderScan();
 }
@@ -805,17 +936,20 @@ async function titleSearch(term){
 }
 function visualHTML(){
   const v = visual, pic = v.img ? `<img src="${v.img}" alt="Your photo">` : "";
-  if (v.stage === "reading") return `<div class="vis-card">${pic}<b>Reading text…</b>
+  if (v.stage === "reading") return `<div class="vis-card">${pic}<b id="visStage">${esc(v.label || "Reading text…")}</b>
     <div class="note">First use downloads the text reader (a few MB), then it's saved on your phone.</div>
     <div class="prog"><i id="visPct" style="width:${v.pct||0}%"></i></div>
     <button class="mini" id="visCancel" style="margin-top:10px">Cancel</button></div>`;
   if (v.stage === "searching") return `<div class="vis-card">${pic}<b>Searching Amazon for "${esc(v.term)}"…</b></div>`;
   const form = `<form id="visForm" style="display:flex;gap:8px;margin-top:8px">
-      <input id="visTerm" value="${esc(v.term||"")}" placeholder="Title and author" aria-label="Title to search">
+      <input id="visTerm" value="${esc(v.term||"")}" placeholder="Title and author, or the ISBN" aria-label="Title or ISBN">
       <button class="btn pri" style="padding:8px 14px">Search</button></form>
-    <div class="note" style="margin-top:4px">Title search costs about 10 Keepa tokens.</div>`;
+    <div class="note" style="margin-top:4px">An ISBN looks up normally. A title search costs about 10 Keepa tokens.</div>`;
+  const chips = v.fixes && v.fixes.length ? `<div class="label" style="margin-top:10px">Close ISBN reads. Tap the one printed on the book</div>
+    <div class="links" style="margin-top:6px">${v.fixes.map(f => `<button class="chip acc num" data-isbn="${f}">${f}</button>`).join("")}</div>` : "";
+  const rawBox = v.raw ? `<details style="margin-top:10px"><summary class="note">Text it read</summary><pre class="note" style="white-space:pre-wrap;max-height:160px;overflow:auto;margin:6px 0 0">${esc(v.raw.slice(0,1200))}</pre></details>` : "";
   if (v.stage === "confirm") return `<div class="vis-card">${pic}
-    ${v.err ? `<div class="err">${esc(v.err)}</div>` : `<div class="note">${esc(v.note)}</div>`}${form}
+    ${v.err ? `<div class="err">${esc(v.err)}</div>` : `<div class="note">${esc(v.note)}</div>`}${chips}${form}${rawBox}
     <button class="mini" id="visCancel" style="margin-top:10px">Cancel</button></div>`;
   // results
   return `<div class="vis-card"><div class="row"><b class="grow">Pick the match</b><button class="mini" id="visCancel">Cancel</button></div>
@@ -827,7 +961,8 @@ function visualHTML(){
 }
 function wireVisual(){
   const c = $("#visCancel"); if (c) c.onclick = () => { visual = null; renderScan(); };
-  const f = $("#visForm"); if (f) f.onsubmit = e => { e.preventDefault(); titleSearch($("#visTerm").value); };
+  const f = $("#visForm"); if (f) f.onsubmit = e => { e.preventDefault(); const v = $("#visTerm").value; if (isCode(v)){ visual = null; lookup(v); } else titleSearch(v); };
+  document.querySelectorAll("[data-isbn]").forEach(b => b.onclick = () => { visual = null; lookup(b.dataset.isbn); });
   document.querySelectorAll("[data-hit]").forEach(b => b.onclick = () => { const p = visual.results[+b.dataset.hit]; visual = null; lookup(p.asin); });
 }
 
@@ -861,7 +996,54 @@ function freshVideo(){
   return v;
 }
 const streamLive = () => stream && stream.getVideoTracks().some(t => t.readyState === "live");
-async function openCam(){
+let liveBusy = false, liveSeen = "", liveLoading = false;
+function setModeBtn(){
+  const b = $("#modeBtn"); b.dataset.mode = S.camMode; b.textContent = S.camMode === "text" ? "ISBN text" : "Barcode";
+  $("#cam").classList.toggle("text", S.camMode === "text");
+  $("#camHint").textContent = S.camMode === "text" ? "Fit the ISBN line inside the box (copyright page or back cover)" : "Point at the barcode";
+}
+$("#modeBtn").onclick = () => { S.camMode = S.camMode === "text" ? "barcode" : "text"; save(); setModeBtn(); };
+function handleCode(code, session){
+  if (session !== camSession) return Promise.resolve(false);
+  if (!S.cont){ closeCam(); if (navigator.vibrate) navigator.vibrate(40); lookup(code); return Promise.resolve(false); }
+  if (code === lastCode && Date.now() - lastAt < 5000) return Promise.resolve(true);   // ignore the same book for 5s
+  lastCode = code; lastAt = Date.now();
+  return contLookup(code).then(() => true);
+}
+function readIsbnLive(video, session){
+  // grab the box, enlarge, clean up, read numbers only; alternate gray and black-and-white frames
+  liveBusy = true;
+  (async () => {
+    try{
+      if (!window.Tesseract || !ocrWorker){
+        if (!liveLoading){ liveLoading = true; $("#camHint").textContent = "Loading the text reader (first time only)…"; }
+      }
+      const w = await getOcr(() => {});
+      if (liveLoading){ liveLoading = false; if (session === camSession) setModeBtn(); }
+      if (session !== camSession || S.camMode !== "text") return;
+      await ocrMode(w, "digits");
+      const vw = video.videoWidth, vh = video.videoHeight;
+      const cw = Math.round(vw*0.9), ch = Math.round(vh*0.18), cx = Math.round((vw-cw)/2), cy = Math.round(vh*0.41);
+      const k = Math.min(2, 1400/cw);
+      const cv = canvasOf(cw*k, ch*k), g = cv.getContext("2d"); g.imageSmoothingQuality = "high";
+      g.drawImage(video, cx, cy, cw, ch, 0, 0, cv.width, cv.height);
+      grayInPlace(cv);
+      liveFrame = (liveFrame + 1) % 2;
+      const img = liveFrame ? binarize(cv) : cv;
+      const r = await capped(w.recognize(img), 6000);
+      if (!r || session !== camSession || S.camMode !== "text") return;
+      const text = r.data.text || "";
+      const c = isbnCandidates(text);
+      if (c.exact.length){ await handleCode(c.exact[0], session); return; }
+      const digits = (text.match(/[0-9X][0-9X \-]{5,}/g) || []).sort((a,b) => b.length-a.length)[0];
+      if (digits && session === camSession && !liveLoading) $("#camHint").textContent = "Reading… " + digits.trim().slice(0,22) + "  (hold steady)";
+    }catch(e){ /* keep trying on the next frame */ }
+    finally{ liveBusy = false; }
+  })();
+}
+let liveFrame = 0;
+async function openCam(mode){
+  if (mode) { S.camMode = mode; save(); }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Live camera needs https. Use the photo option."); return; }
   if (!window.ZXing && !("BarcodeDetector" in window)){ toast("Scanner library didn't load. Reload the page."); return; }
   if (native === null && "BarcodeDetector" in window){
@@ -871,7 +1053,7 @@ async function openCam(){
   try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === "suspended") audio.resume(); } catch(e){}
   setContBtn(); $("#camRes").hidden = true; lastCode = null;
   $("#cam").hidden = false;
-  $("#camHint").textContent = "Point at the barcode";
+  setModeBtn();
   // keep the camera stream between scans: faster, no re-prompt, avoids the iOS second-open freeze
   if (!streamLive()){
     if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
@@ -903,14 +1085,11 @@ async function openCam(){
       }catch(e){ zx = null; }   // rebuild the decoder if it ever gets into a bad state
       if (session !== camSession) return;
       if (code){
-        if (!S.cont){ closeCam(); if (navigator.vibrate) navigator.vibrate(40); lookup(code); return; }
-        if (!(code === lastCode && Date.now() - lastAt < 5000)){   // ignore the same barcode for 5s
-          lastCode = code; lastAt = Date.now();
-          await contLookup(code);
-          if (session !== camSession) return;
-        }
+        const keepGoing = await handleCode(code, session);
+        if (!keepGoing || session !== camSession) return;
       }
-      if (++n === 40) $("#camHint").textContent = "Hold steady, fill the box with the barcode, avoid glare";
+      if (S.camMode === "text" && !liveBusy) readIsbnLive(video, session);
+      if (++n === 40 && S.camMode !== "text") $("#camHint").textContent = "Hold steady, fill the box with the barcode, avoid glare";
     } else if (video.paused) { try { await video.play(); } catch(e){} }
     camTimer = setTimeout(tick, 120);
   };
