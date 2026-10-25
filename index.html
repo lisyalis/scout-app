@@ -116,6 +116,15 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .scanbar input{border:0;background:none;padding:6px 0;font-size:17px}
 .scanbar input:focus-visible{outline:none}
 .round{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;flex:none}
+.round.vis{background:var(--panel2);color:var(--fg);border:1px solid var(--line)}
+.vis-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:4px}
+.vis-card img{max-height:180px;border-radius:8px;display:block;margin:0 auto 10px}
+.prog{height:6px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:8px}
+.prog>i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+.hit{display:flex;gap:10px;align-items:center;width:100%;text-align:left;padding:10px;border-top:1px solid var(--line)}
+.hit:first-child{border-top:0}
+.hit img{width:40px;height:54px;object-fit:contain;background:#fff;border-radius:4px;flex:none}
+.hit .t{font-weight:600;line-height:1.25}
 .round.cam{background:var(--accent);color:var(--accent-ink)}
 .round svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2}
 .empty{padding:28px 10px;text-align:center;color:var(--muted)}
@@ -127,7 +136,15 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .cam-wrap{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column}
 .cam-wrap video{flex:1;width:100%;object-fit:cover;min-height:0}
 .reticle{position:absolute;left:10%;right:10%;top:32.5%;height:35%;border:3px solid var(--accent);border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.35)}
-.cam-bar{display:flex;justify-content:space-between;align-items:center;padding:14px max(16px,env(safe-area-inset-left,0px)) calc(14px + env(safe-area-inset-bottom,0px));background:#000;color:#fff}
+.camres{position:absolute;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));top:calc(12px + env(safe-area-inset-top,0px));border-radius:14px;padding:12px 14px;display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px;align-items:center;text-align:left;color:#111;background:#9aa3ad;box-shadow:0 6px 24px rgba(0,0,0,.4)}
+.camres.buy{background:var(--buy);color:#05230f}.camres.skip{background:var(--skip);color:#2a0705}.camres.wait{background:var(--panel2);color:var(--fg)}
+.camres .w{font:700 34px/1 var(--display);grid-row:span 2}
+.camres .p{font:700 26px/1 var(--display);text-align:right;grid-row:span 2}
+.camres .t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.camres .s{font-size:13px;font-weight:600;opacity:.85}
+.cam-bar .btn{padding:9px 12px;font-size:14px}
+#contBtn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.cam-bar{gap:8px;display:flex;justify-content:space-between;align-items:center;padding:14px max(16px,env(safe-area-inset-left,0px)) calc(14px + env(safe-area-inset-bottom,0px));background:#000;color:#fff}
 
 /* chart sheet */
 .sheet{position:fixed;inset:0;background:var(--bg);z-index:40;display:flex;flex-direction:column;padding:calc(10px + env(safe-area-inset-top,0px)) max(14px,env(safe-area-inset-left,0px)) calc(14px + env(safe-area-inset-bottom,0px)) max(14px,env(safe-area-inset-right,0px));overflow-y:auto}
@@ -183,7 +200,10 @@ table.ev small{color:var(--muted);display:block}
 <div class="cam-wrap" id="cam" hidden>
   <video id="video" autoplay playsinline muted></video>
   <div class="reticle"></div>
-  <div class="cam-bar"><span id="camHint">Point at the barcode</span><button class="btn" id="camClose">Close</button></div>
+  <button class="camres" id="camRes" hidden></button>
+  <div class="cam-bar"><span id="camHint" style="flex:1">Point at the barcode</span>
+    <button class="btn" id="contBtn" aria-pressed="false">Continuous: Off</button>
+    <button class="btn" id="camClose">Done</button></div>
 </div>
 
 <div class="sheet" id="sheet" hidden></div>
@@ -204,11 +224,12 @@ const LS = {
   set(k, v){ try{ localStorage.setItem("scout."+k, JSON.stringify(v)); }catch(e){} }
 };
 const DEFAULT_TRIGGERS = [
-  {name:"Fast Mover",        on:true, color:"green",  rMin:1,       rMax:250000,   pMin:24, pMax:186, minProfit:4},
-  {name:"Good Mover",        on:true, color:"green",  rMin:250000,  rMax:1000000,  pMin:24, pMax:186, minProfit:5},
-  {name:"Solid Buy",         on:true, color:"green",  rMin:1000000, rMax:3000000,  pMin:12, pMax:186, minProfit:7},
-  {name:"Lowest Price Check",on:true, color:"yellow", rMin:1000000, rMax:3000000,  pMin:6,  pMax:186, minProfit:7},
-  {name:"Lowest Price Check",on:true, color:"yellow", rMin:3000000, rMax:6000000,  pMin:3,  pMax:186, minProfit:20},
+  {name:"Fast Mover",        on:true, color:"green",  rMin:1,       rMax:250000,   pMin:24, pMax:9999, minProfit:4},
+  {name:"Slow Mover",        on:true, color:"green",  rMin:1,       rMax:250000,   pMin:6,  pMax:23,   minProfit:7},
+  {name:"Good Mover",        on:true, color:"green",  rMin:250000,  rMax:1000000,  pMin:24, pMax:9999, minProfit:5},
+  {name:"Solid Buy",         on:true, color:"green",  rMin:1000000, rMax:3000000,  pMin:12, pMax:9999, minProfit:7},
+  {name:"Lowest Price Check",on:true, color:"yellow", rMin:1000000, rMax:3000000,  pMin:6,  pMax:9999, minProfit:7},
+  {name:"Lowest Price Check",on:true, color:"yellow", rMin:3000000, rMax:6000000,  pMin:3,  pMax:9999, minProfit:20},
   {name:"Exclude Trigger",   on:true, color:"red",    rMin:6000000, rMax:100000000,pMin:100,pMax:101, minProfit:10000}
 ];
 const DEFAULT_EV = [
@@ -230,12 +251,25 @@ const S = {
   prep:     LS.get("prep", 0.00),          // per-unit prep cost
   defCost:  LS.get("defCost", 0.00),
   buybox:   LS.get("buybox", true),        // costs +2 Keepa tokens
-  autoOffers: LS.get("autoOffers", false), // live offers cost ~12 tokens per scan
+  autoOffers: LS.get("autoOffers", false),
+  cont:     LS.get("cont", false),         // continuous scan
+  ladder:   LS.get("ladder", true),        // triggers fall through to slower tiers
+  roi:      LS.get("roi", {minProfit:5, minRoi:50, maxRank:6000000, minPulse:6}), // live offers cost ~12 tokens per scan
   history:  LS.get("history", []),
   inv:      LS.get("inv", []),
   tokens:   LS.get("tokens", null)
 };
-function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","history","inv","tokens"]) LS.set(k, S[k]); }
+// pulse max of 186 (from the old app) cut off the fastest sellers; treat it as no upper limit
+S.triggers.forEach(t => { if (t.pMax === 186) t.pMax = 9999; });
+// add the Slow Mover trigger to saved settings once, right after Fast Mover
+if (!LS.get("addedSlow", false)){
+  if (!S.triggers.some(t => t.name === "Slow Mover")){
+    const i = S.triggers.findIndex(t => t.name === "Fast Mover");
+    S.triggers.splice(i >= 0 ? i+1 : 0, 0, {name:"Slow Mover",on:true,color:"green",rMin:1,rMax:250000,pMin:6,pMax:23,minProfit:7});
+  }
+  LS.set("addedSlow", true); LS.set("triggers", S.triggers);
+}
+function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
 
 /* ============ helpers ============ */
 const $ = s => document.querySelector(s);
@@ -267,6 +301,7 @@ async function lookup(raw){
   if (lookupCtl) lookupCtl.abort();          // drop any lookup still hanging
   const ctl = lookupCtl = new AbortController();
   const timer = setTimeout(() => ctl.abort("timeout"), 20000);
+  visual = null;
   busy = true; renderScan();
   const t0 = Date.now();
   const secTimer = setInterval(() => { const el = $("#lookSec"); if (el) el.textContent = Math.round((Date.now()-t0)/1000) + "s"; }, 1000);
@@ -295,9 +330,10 @@ async function lookup(raw){
     if (navigator.vibrate) navigator.vibrate(current.calc.buy ? [60,40,60] : 120);
     offTab = null;
     busy = false; renderScan();
-    if (S.autoOffers) loadOffers();
+    if (S.autoOffers || cachedOffers(current.product.asin)) loadOffers(false);
+    return {ok:true};
   }catch(e){
-    if (ctl !== lookupCtl) return;            // a newer scan replaced this one
+    if (ctl !== lookupCtl) return {ok:false, stale:true};   // a newer scan replaced this one
     busy = false;
     let msg = e && e.message;
     if (ctl.signal.aborted){
@@ -308,6 +344,7 @@ async function lookup(raw){
     }
     renderScan(msg);
     save();
+    return {ok:false, error:msg};
   }finally{
     clearTimeout(timer); clearInterval(secTimer);
     if (ctl === lookupCtl) lookupCtl = null;
@@ -330,22 +367,30 @@ function parseOffers(p){
   });
   return out.sort((a,b) => a.total - b.total);
 }
-async function loadOffers(){
+const OFFER_TTL = 2*3600e3;
+function cachedOffers(asin){
+  const c = LS.get("offers."+asin, null);
+  return c && Date.now() - c.t < OFFER_TTL ? c : null;
+}
+async function loadOffers(force){
   if (!current || current.offersLoading) return;
   const asin = current.product.asin, mine = current;
+  const hit = !force && cachedOffers(asin);
+  if (hit){ mine.offers = hit.list; mine.offersAt = hit.t; mine.calc = calc(mine.product, mine.cost); renderScan(); return; }
   mine.offersLoading = true; mine.offersErr = null; renderScan();
   const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 20000);
   try{
-    const params = new URLSearchParams({key:S.key, domain:"1", asin, offers:"20", "only-live-offers":"1", history:"0", stats:"0", _:String(Date.now())});
+    const params = new URLSearchParams({key:S.key, domain:"1", asin, offers:"40", "only-live-offers":"1", history:"0", stats:"0", _:String(Date.now())});
     const r = await fetch("https://api.keepa.com/product?"+params, {signal:ctl.signal, cache:"no-store"});
     let j = null; try { j = await r.json(); } catch(e){}
     if (j && j.tokensLeft != null) S.tokens = j.tokensLeft;
-    if (r.status === 429) throw new Error("Not enough Keepa tokens for offers (about 12 needed)." + (j && j.refillIn ? ` Refill in ${Math.ceil(j.refillIn/1000)}s.` : ""));
+    if (r.status === 429) throw new Error("Not enough Keepa tokens for offers." + (j && j.refillIn ? ` Refill in ${Math.ceil(j.refillIn/1000)}s.` : ""));
     if (!r.ok || !j) throw new Error("Keepa offers request failed (HTTP "+r.status+").");
     if (j.error) throw new Error(j.error.message || j.error.type);
     const p = (j.products||[])[0];
     if (!p) throw new Error("No offer data for this item.");
-    mine.offers = parseOffers(p);
+    mine.offers = parseOffers(p); mine.offersAt = Date.now();
+    LS.set("offers."+asin, {t:mine.offersAt, list:mine.offers});
   }catch(e){
     mine.offersErr = ctl.signal.aborted ? "Keepa didn't answer within 20 seconds." : e.message;
   }finally{
@@ -365,21 +410,30 @@ function offersHTML(){
   const head = `<div class="offtabs">
     <button style="background:#b8c0c8" aria-pressed="true">USED (${counts.used})</button>
     <button style="background:var(--blue)" aria-pressed="true">NEW (${counts.new})</button>
-    <button style="background:var(--accent)" aria-pressed="true">FBA (${counts.fba})</button></div>`;
+    <button style="background:var(--accent)" aria-pressed="true">${o ? `FBA (${counts.fba})` : "BUY BOX"}</button></div>`;
   const sellbar = `<div class="sellbar"><span class="amt num">${money(c.sell)}</span><span class="note">sell price</span>
     ${sellOffer ? `<span class="src">FBA ${sellOffer.total.toFixed(2)} · ${short(sellOffer.cond)}</span>` : `<span class="src">${esc(c.sellSrc).toUpperCase()}</span>`}
-    <span class="note" style="margin-left:auto">${o ? "live offers" : "from Keepa stats"}</span></div>`;
+    ${o ? `<span class="note" style="margin-left:auto">${current.offersAt ? Math.max(0,Math.round((Date.now()-current.offersAt)/60000)) + "m old" : ""}</span><button class="mini" id="reOff">Refresh</button>` : '<span class="note" style="margin-left:auto">from Keepa stats</span>'}</div>`;
   let body;
   if (current.offersLoading) body = `<div class="empty" style="padding:16px">Loading live offers…</div>`;
   else if (current.offersErr) body = `<div class="err" style="margin:8px">${esc(current.offersErr)}</div>`;
-  else if (!o) body = `<div class="empty" style="padding:14px"><button class="btn pri" id="loadOff" style="width:100%">Load live offers (≈12 tokens)</button></div>`;
+  else if (!o){
+    // free: lowest price per condition from the stats the scan already paid for
+    const f = (v, chip, extra="") => v != null ? `<div class="oc${extra}"><span class="pr">${v.toFixed(2)}</span><span class="cc">${chip}</span></div>` : "";
+    const usedCol = f(pr.usedLN,"LN") + f(pr.usedVG,"VG") + f(pr.usedG,"G") + f(pr.usedA,"A") || '<div class="oc note">none</div>';
+    const newCol  = f(pr.newLow,"N") + f(pr.newFBA,"N FBA") + f(pr.amazon,"AMZ") || '<div class="oc note">none</div>';
+    const bbCol   = f(pr.usedBB,"U BB", S.cond==="used" && c.sell===pr.usedBB ? " sell" : "") + f(pr.newBB,"N BB", S.cond==="new" && c.sell===pr.newBB ? " sell" : "") || '<div class="oc note">none</div>';
+    body = `<div class="offcols"><div class="offcol">${usedCol}</div><div class="offcol">${newCol}</div><div class="offcol">${bbCol}</div></div>
+      <div class="empty" style="padding:10px 12px;text-align:left;display:flex;gap:10px;align-items:center">
+        <span class="note" style="flex:1">Lowest price per condition. Free.</span>
+        <button class="mini" id="loadOff">Full live list (≈6 tokens per 10 offers)</button></div>`;
+  }
   else {
     const cell = (x, isSell) => `<div class="oc${isSell ? " sell" : ""}"><span class="pr">${x.total.toFixed(2)}</span><span class="cc${x.fba || x.amazon ? "" : " fbm"}">${short(x.cond)}</span></div>`;
-    const col = (list, mark) => `<div class="offcol">${list.length ? list.slice(0,10).map(x => cell(x, mark && x === sellOffer)).join("") : '<div class="oc note">none</div>'}</div>`;
+    const col = (list, mark) => `<div class="offcol">${list.length ? list.slice(0,8).map(x => cell(x, mark && x === sellOffer)).join("") : '<div class="oc note">none</div>'}</div>`;
     body = `<div class="offcols">${col(usedL,false)}${col(newL,false)}${col(fbaL,true)}</div>`;
   }
-  return `<div class="offhead"><span class="label" style="flex:1">Compare offers</span>${o ? '<button class="mini" id="loadOff">Refresh</button>' : ""}</div>
-  <div class="offers">${head}${sellbar}${body}</div>`;
+  return `<div class="offers">${head}${sellbar}${body}</div>`;
 }
 function rangeHTML(){
   // 12-month price range from Keepa history (listing prices, not confirmed sales)
@@ -438,15 +492,19 @@ function readPrices(p){
 }
 function calc(p, cost){
   const pr = readPrices(p);
-  let sell = S.cond === "used"
-    ? (pr.usedBB ?? pr.usedVG ?? pr.usedG ?? pr.usedLow)
-    : (pr.newBB ?? pr.newFBA ?? pr.newLow ?? pr.amazon);
-  let sellSrc = "buy box";
+  const firstOf = list => { for (const [v, src] of list) if (v != null) return [v, src]; return [null, ""]; };
+  let [sell, sellSrc] = S.cond === "used"
+    ? firstOf([[pr.usedBB,"used buy box"],[pr.usedVG,"lowest VG"],[pr.usedG,"lowest G"],[pr.usedLow,"lowest used"]])
+    : firstOf([[pr.newBB,"new buy box"],[pr.newFBA,"lowest new FBA"],[pr.newLow,"lowest new"],[pr.amazon,"Amazon"]]);
   const offs = current && current.product === p ? current.offers : null;
+  let newFBA = pr.newFBA ?? pr.newBB;
   if (offs){
     const fba = offs.filter(x => x.fba && (S.cond === "used" ? x.used : x.isNew));
     if (fba.length){ sell = fba[0].total; sellSrc = "lowest FBA"; }
+    const nf = offs.find(x => x.fba && x.isNew); if (nf) newFBA = nf.total;
   }
+  // buyers won't pay more for used than for a new Prime copy
+  if (S.cond === "used" && sell != null && newFBA != null && newFBA < sell){ sell = newFBA; sellSrc = "capped at new FBA"; }
   const isBook = p.rootCategory === 283155 || p.productGroup === "Book" || p.type === "BOOK";
   const refPct = (p.referralFeePercentage ?? p.referralFeePercent ?? 15) / 100;
   const fbaFee = p.fbaFees && p.fbaFees.pickAndPackFee > 0 ? p.fbaFees.pickAndPackFee/100 : 3.50;
@@ -460,15 +518,20 @@ function calc(p, cost){
   const res = {pr, sell, sellSrc, fees, profit, fbaFee, refPct, closing, lbs, isBook, buy:false, why:"", trigger:null};
   if (profit == null){ res.why = "No price"; return res; }
   if (p.isAdultProduct){ res.why = "Adult item"; return res; }
+  res.roi = cost > 0 ? res.profit / cost * 100 : null;
   if (S.mode === "ev") return evDecide(res);
+  if (S.mode === "roi") return roiDecide(res);
   return trigDecide(res);
 }
 function trigDecide(res){
   const rank = res.pr.rank ?? 0, pulse = res.pr.pulse;
   for (const t of S.triggers){
     if (!t.on) continue;
-    const inRank = rank >= t.rMin && rank <= t.rMax;
-    const inPulse = pulse >= t.pMin && pulse <= t.pMax;
+    // Ladder: a better rank or a faster pulse never disqualifies a book. If it misses a tier,
+    // it drops to the next, slower tier, which asks for more profit. Exclude (red) triggers still use exact ranges.
+    const ladder = S.ladder && t.color !== "red";
+    const inRank = ladder ? (rank > 0 && rank <= t.rMax) : (rank >= t.rMin && rank <= t.rMax);
+    const inPulse = ladder ? pulse >= t.pMin : (pulse >= t.pMin && pulse <= t.pMax);
     if (inRank && inPulse){
       res.trigger = t.name;
       if (t.color === "red"){ res.why = t.name; return res; }
@@ -477,6 +540,17 @@ function trigDecide(res){
     }
   }
   res.why = res.trigger ? "Under min profit" : "No trigger hit";
+  return res;
+}
+function roiDecide(res){
+  const r = S.roi, rank = res.pr.rank, pulse = res.pr.pulse;
+  res.target = r.minProfit; res.trigger = "ROI rule";
+  if (!rank || rank > r.maxRank){ res.why = rank ? "Rank over " + kfmt(r.maxRank) : "No sales rank"; return res; }
+  if (pulse < r.minPulse){ res.why = `Only ${pulse} sales in 6m (need ${r.minPulse})`; return res; }
+  if (res.profit < r.minProfit){ res.why = "Under $" + r.minProfit + " profit"; return res; }
+  if (res.roi != null && res.roi < r.minRoi){ res.why = `ROI ${Math.round(res.roi)}% (need ${r.minRoi}%)`; return res; }
+  res.buy = true;
+  res.why = "ROI rule · " + (res.roi == null ? "free item" : Math.round(res.roi) + "% ROI");
   return res;
 }
 function bucket(pr){
@@ -522,7 +596,9 @@ document.getElementById("tabs").addEventListener("click", e => { const b=e.targe
 
 function scanBar(){
   return `<form class="scanbar" id="scanForm" autocomplete="off">
-    <input id="q" inputmode="text" placeholder="Scan or type ISBN, UPC, ASIN" enterkeyhint="search" aria-label="ISBN, UPC or ASIN">
+    <input id="q" inputmode="text" placeholder="ISBN, UPC, ASIN or a title" enterkeyhint="search" aria-label="ISBN, UPC, ASIN or title">
+    <button class="round vis" type="button" id="visBtn" aria-label="Visual scan: photo of cover or copyright page"><svg viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4z"/><path d="M20 5h-6a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h6z"/></svg></button>
+    <input type="file" accept="image/*" capture="environment" id="visIn" hidden>
     <button class="round cam" type="button" id="camBtn" aria-label="Scan with camera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
   </form>
   <label class="note" style="display:block;margin-top:6px">No live camera? <input type="file" accept="image/*" capture="environment" id="photoIn" style="width:auto;border:0;padding:0;font-size:13px"></label>`;
@@ -546,13 +622,16 @@ function renderScanInner(err){
     <div class="seg" role="group" aria-label="Decision mode">
       <button data-mode="triggers" aria-pressed="${S.mode==="triggers"}">TRIG</button>
       <button data-mode="ev" aria-pressed="${S.mode==="ev"}">EV</button>
+      <button data-mode="roi" aria-pressed="${S.mode==="roi"}">ROI</button>
     </div>
     <span class="tokens num" title="Keepa tokens left">${S.tokens==null ? "— tok" : kfmt(S.tokens)+" tok"}</span>
   </div>`;
   let body;
-  if (busy) body = `<div class="empty"><b>Looking up…</b>Pulling Keepa data <span id="lookSec"></span><br><button class="mini" id="cancelLookup" style="margin-top:10px">Cancel</button></div>`;
+  if (visual && !busy) body = visualHTML();
+  else if (busy) body = `<div class="empty"><b>Looking up…</b>Pulling Keepa data <span id="lookSec"></span><br><button class="mini" id="cancelLookup" style="margin-top:10px">Cancel</button></div>`;
   else if (!current) body = `<div class="empty"><b>Ready to scan</b>${S.key ? "Tap the camera or type a code. Bluetooth scanners work in the box too." : "Add your Keepa API key in Settings to start."}</div>`;
   else body = resultHTML();
+  if (visual && !busy) {} // body already set
   $("#main").innerHTML = head + body + (err ? `<div class="err">${esc(err)}</div>` : "") + scanBar();
   wireScan();
 }
@@ -573,7 +652,7 @@ function resultHTML(){
   ${rangeHTML()}
   ${tilesHTML()}
   ${offersHTML()}
-  <div class="note" style="margin-top:6px">Fees ${money(c.fees)} = ${Math.round(c.refPct*100)}% referral${c.closing?" + $1.80 closing":""} + ${money(c.fbaFee)} FBA + ${money(c.lbs*S.inbound)} inbound${S.prep?" + prep":""} · offers: ${pr.countUsed} used / ${pr.countNew} new</div>
+  <div class="note" style="margin-top:6px">${c.roi != null ? `ROI ${Math.round(c.roi)}% · ` : ""}Fees ${money(c.fees)} = ${Math.round(c.refPct*100)}% referral${c.closing?" + $1.80 closing":""} + ${money(c.fbaFee)} FBA + ${money(c.lbs*S.inbound)} inbound${S.prep?" + prep":""} · offers: ${pr.countUsed} used / ${pr.countNew} new</div>
   <div class="links">
     <button class="chip acc" id="chartBtn">Chart</button>
     <a class="chip" target="_blank" rel="noopener" href="https://www.amazon.com/dp/${p.asin}">Amazon</a>
@@ -598,13 +677,16 @@ function resultHTML(){
 }
 function wireScanBar(){
   const f = $("#scanForm");
-  f.addEventListener("submit", e => { e.preventDefault(); const v=$("#q").value; $("#q").value=""; lookup(v); });
+  f.addEventListener("submit", e => { e.preventDefault(); const v=$("#q").value; $("#q").value=""; isCode(v) ? lookup(v) : titleSearch(v); });
+  $("#visBtn").addEventListener("click", () => $("#visIn").click());
+  $("#visIn").addEventListener("change", visualScan);
   $("#camBtn").addEventListener("click", openCam);
   $("#photoIn").addEventListener("change", photoScan);
   const c = $("#cancelLookup"); if (c) c.onclick = () => { if (lookupCtl) lookupCtl.abort(); lookupCtl = null; busy = false; renderScan("Lookup canceled."); };
 }
 function wireScan(){
   wireScanBar();
+  if (visual && !busy){ wireVisual(); return; }
   document.querySelectorAll("[data-cond]").forEach(b => b.onclick = () => { S.cond=b.dataset.cond; save(); if(current) current.calc=calc(current.product,current.cost); renderScan(); });
   document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { S.mode=b.dataset.mode; save(); if(current) current.calc=calc(current.product,current.cost); renderScan(); });
   if (!current || busy) return;   // the "Looking up" screen has no result controls to wire
@@ -613,7 +695,8 @@ function wireScan(){
   cost.addEventListener("focus", () => cost.select());
   $("#chartBtn").onclick = () => openChart(current.product);
   document.querySelectorAll("[data-off]").forEach(b => b.onclick = () => { offTab = b.dataset.off; renderScan(); });
-  const lo = $("#loadOff"); if (lo) lo.onclick = loadOffers;
+  const lo = $("#loadOff"); if (lo) lo.onclick = () => loadOffers(false);
+  const ro = $("#reOff"); if (ro) ro.onclick = () => loadOffers(true);
   $("#clearRes").onclick = () => { current=null; renderScan(); setTimeout(()=>$("#q").focus(),0); };
   $("#addInv").onclick = () => {
     const p=current.product, c=current.calc;
@@ -621,6 +704,131 @@ function wireScan(){
     save(); toast("Added to inventory");
   };
   document.querySelectorAll("[data-m]").forEach(b => b.onclick = () => pick(current.matches[+b.dataset.m]));
+}
+
+/* ============ visual scan + title search ============ */
+// Free on-phone text reading (Tesseract). ISBN found -> normal lookup. Otherwise read the big cover text,
+// let the user fix it, then run a Keepa title search (~10 tokens) and pick the match.
+let visual = null;   // {stage, pct, img, term, results, err, note}
+let ocrWorker = null;
+const isCode = v => { const c = String(v||"").replace(/[\s-]/g,"").toUpperCase();
+  return /^[0-9]{8,14}$/.test(c) || /^[0-9]{9}[0-9X]$/.test(c) || /^B0[0-9A-Z]{8}$/.test(c); };
+function validIsbn(d){
+  if (d.length === 13 && /^97[89][0-9]{10}$/.test(d)){ let s=0; for (let i=0;i<12;i++) s += (+d[i])*(i%2?3:1); return (10 - s%10)%10 === +d[12]; }
+  if (d.length === 10 && /^[0-9]{9}[0-9X]$/.test(d)){ let s=0; for (let i=0;i<10;i++) s += (d[i]==="X"?10:+d[i])*(10-i); return s%11 === 0; }
+  return false;
+}
+function findIsbn(text){
+  // fix common OCR swaps inside number runs, then test every 10/13-char window
+  // (no lookbehind regex: older iPhones can't parse it)
+  const t = text.toUpperCase().replace(/[0-9OIL|X][0-9OIL|X\s-]{8,}[0-9OIL|X]/g, run => /[0-9]{4}/.test(run) ? run.replace(/O/g,"0").replace(/[IL|]/g,"1") : run);
+  const runs = t.match(/[0-9X][0-9X\s-]{8,20}[0-9X]/g) || [];
+  for (const r of runs){
+    const d = r.replace(/[\s-]/g,"");
+    for (const len of [13,10]) for (let i=0; i+len<=d.length; i++){ const w = d.slice(i,i+len); if (validIsbn(w)) return w; }
+  }
+  return null;
+}
+function guessTitle(data){
+  const lines = (data.lines || []).map(l => ({text:l.text.trim(), h:l.bbox.y1-l.bbox.y0, y:l.bbox.y0, conf:l.confidence}))
+    .filter(l => { const letters = (l.text.match(/[A-Za-z]/g)||[]).length; return letters >= 3 && letters/l.text.length > .6 && l.conf > 45; });
+  if (!lines.length) return (data.text||"").replace(/[^A-Za-z0-9' ]+/g," ").replace(/\s+/g," ").trim().slice(0,70);
+  const maxH = Math.max(...lines.map(l => l.h));
+  const big = [...lines].filter(l => l.h >= maxH*.45).sort((a,b) => b.h-a.h).slice(0,4).sort((a,b) => a.y-b.y);   // biggest text, read top to bottom
+  return big.map(l => l.text).join(" ").replace(/[^A-Za-z0-9'&: ]+/g," ").replace(/\s+/g," ").trim().slice(0,80);
+}
+async function getOcr(onPct){
+  if (!window.Tesseract){
+    await new Promise((ok, bad) => { const sc = document.createElement("script");
+      sc.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"; sc.onload = ok; sc.onerror = () => bad(new Error("Couldn't download the text reader. Check your connection."));
+      document.head.appendChild(sc); });
+  }
+  if (!ocrWorker){
+    ocrWorker = await Tesseract.createWorker("eng", 1, {logger: m => { if (m.status === "recognizing text") onPct(Math.round(m.progress*100)); }});
+  }
+  return ocrWorker;
+}
+async function prepImage(file){
+  const bmp = await createImageBitmap(file);
+  const s = Math.min(1, 2000/Math.max(bmp.width,bmp.height));
+  const cv = document.createElement("canvas"); cv.width = Math.round(bmp.width*s); cv.height = Math.round(bmp.height*s);
+  const g = cv.getContext("2d", {willReadFrequently:true}); g.drawImage(bmp,0,0,cv.width,cv.height);
+  // grayscale + stretch contrast helps the reader a lot on glossy covers
+  const im = g.getImageData(0,0,cv.width,cv.height), d = im.data; let mn=255, mx=0;
+  for (let i=0;i<d.length;i+=4){ const v = d[i]*.299+d[i+1]*.587+d[i+2]*.114; d[i]=v; if (v<mn) mn=v; if (v>mx) mx=v; }
+  const k = 255/Math.max(1,mx-mn);
+  for (let i=0;i<d.length;i+=4){ const v = (d[i]-mn)*k; d[i]=d[i+1]=d[i+2]=v; }
+  g.putImageData(im,0,0);
+  return cv;
+}
+async function visualScan(e){
+  const file = e.target.files[0]; e.target.value = ""; if (!file) return;
+  if (!S.key){ renderScan("Add your Keepa API key in Settings first."); return; }
+  const img = URL.createObjectURL(file);
+  visual = {stage:"reading", pct:0, img}; renderScan();
+  try{
+    const cv = await prepImage(file);
+    const w = await getOcr(p => { if (visual){ visual.pct = p; const b = $("#visPct"); if (b) b.style.width = p+"%"; } });
+    if (!visual) return;
+    const {data} = await w.recognize(cv, {rotateAuto:true});
+    if (!visual) return;
+    const isbn = findIsbn(data.text || "");
+    if (isbn){ visual = null; lookup(isbn); return; }
+    visual = {stage:"confirm", img, term:guessTitle(data), note:"No ISBN found, so here's the title it read. Fix it if needed."};
+  }catch(err){
+    visual = {stage:"confirm", img, term:"", note:"", err:(err && err.message) || "Couldn't read that photo."};
+  }
+  renderScan();
+}
+async function titleSearch(term){
+  term = String(term||"").trim();
+  if (term.length < 3){ renderScan("Type at least a few words of the title."); return; }
+  if (!S.key){ renderScan("Add your Keepa API key in Settings first."); return; }
+  visual = {...(visual||{}), stage:"searching", term};
+  renderScan();
+  const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 20000);
+  try{
+    const params = new URLSearchParams({key:S.key, domain:"1", type:"product", term, page:"0", _:String(Date.now())});
+    const r = await fetch("https://api.keepa.com/search?"+params, {signal:ctl.signal, cache:"no-store"});
+    let j = null; try { j = await r.json(); } catch(e){}
+    if (j && j.tokensLeft != null){ S.tokens = j.tokensLeft; save(); }
+    if (r.status === 429) throw new Error("Not enough Keepa tokens for a title search (about 10)." + (j && j.refillIn ? ` Refill in ${Math.ceil(j.refillIn/1000)}s.` : ""));
+    if (!r.ok || !j) throw new Error("Keepa search failed (HTTP "+r.status+").");
+    if (j.error) throw new Error(j.error.message || j.error.type);
+    const prods = (j.products || []).filter(p => p && p.asin && p.title).slice(0,10);
+    const list = prods.length ? prods : (j.asinList || []).slice(0,10).map(a => ({asin:a, title:a}));
+    visual = {...visual, stage:"results", results:list, err: list.length ? null : `No Amazon matches for "${term}". Try fewer words, like just the main title and author's last name.`};
+  }catch(err){
+    visual = {...visual, stage:"results", results:[], err: ctl.signal.aborted ? "Keepa didn't answer within 20 seconds." : err.message};
+  }finally{ clearTimeout(tm); }
+  renderScan();
+}
+function visualHTML(){
+  const v = visual, pic = v.img ? `<img src="${v.img}" alt="Your photo">` : "";
+  if (v.stage === "reading") return `<div class="vis-card">${pic}<b>Reading text…</b>
+    <div class="note">First use downloads the text reader (a few MB), then it's saved on your phone.</div>
+    <div class="prog"><i id="visPct" style="width:${v.pct||0}%"></i></div>
+    <button class="mini" id="visCancel" style="margin-top:10px">Cancel</button></div>`;
+  if (v.stage === "searching") return `<div class="vis-card">${pic}<b>Searching Amazon for "${esc(v.term)}"…</b></div>`;
+  const form = `<form id="visForm" style="display:flex;gap:8px;margin-top:8px">
+      <input id="visTerm" value="${esc(v.term||"")}" placeholder="Title and author" aria-label="Title to search">
+      <button class="btn pri" style="padding:8px 14px">Search</button></form>
+    <div class="note" style="margin-top:4px">Title search costs about 10 Keepa tokens.</div>`;
+  if (v.stage === "confirm") return `<div class="vis-card">${pic}
+    ${v.err ? `<div class="err">${esc(v.err)}</div>` : `<div class="note">${esc(v.note)}</div>`}${form}
+    <button class="mini" id="visCancel" style="margin-top:10px">Cancel</button></div>`;
+  // results
+  return `<div class="vis-card"><div class="row"><b class="grow">Pick the match</b><button class="mini" id="visCancel">Cancel</button></div>
+    ${v.err ? `<div class="err">${esc(v.err)}</div>` : ""}
+    <div style="margin-top:8px">${(v.results||[]).map((p,i) => `<button class="hit" data-hit="${i}">
+      ${imgUrl(p) ? `<img src="${imgUrl(p)}" alt="">` : ""}
+      <span style="min-width:0"><span class="t">${esc(p.title)}</span><br><span class="note">${esc(p.author || p.brand || "")}${p.binding ? " · "+esc(p.binding) : ""} · <span class="num">${esc(p.asin)}</span></span></span></button>`).join("")}</div>
+    ${form}</div>`;
+}
+function wireVisual(){
+  const c = $("#visCancel"); if (c) c.onclick = () => { visual = null; renderScan(); };
+  const f = $("#visForm"); if (f) f.onsubmit = e => { e.preventDefault(); titleSearch($("#visTerm").value); };
+  document.querySelectorAll("[data-hit]").forEach(b => b.onclick = () => { const p = visual.results[+b.dataset.hit]; visual = null; lookup(p.asin); });
 }
 
 /* ============ camera ============ */
@@ -660,6 +868,8 @@ async function openCam(){
     try { native = new BarcodeDetector({formats:["ean_13","upc_a","ean_8","upc_e","code_128"]}); } catch(e){ native = false; }
   }
   clearTimeout(camTimer); camTimer = null;
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === "suspended") audio.resume(); } catch(e){}
+  setContBtn(); $("#camRes").hidden = true; lastCode = null;
   $("#cam").hidden = false;
   $("#camHint").textContent = "Point at the barcode";
   // keep the camera stream between scans: faster, no re-prompt, avoids the iOS second-open freeze
@@ -692,14 +902,49 @@ async function openCam(){
         else if (window.ZXing) code = decodeCanvas(cv);
       }catch(e){ zx = null; }   // rebuild the decoder if it ever gets into a bad state
       if (session !== camSession) return;
-      if (code){ closeCam(); if (navigator.vibrate) navigator.vibrate(40); lookup(code); return; }
+      if (code){
+        if (!S.cont){ closeCam(); if (navigator.vibrate) navigator.vibrate(40); lookup(code); return; }
+        if (!(code === lastCode && Date.now() - lastAt < 5000)){   // ignore the same barcode for 5s
+          lastCode = code; lastAt = Date.now();
+          await contLookup(code);
+          if (session !== camSession) return;
+        }
+      }
       if (++n === 40) $("#camHint").textContent = "Hold steady, fill the box with the barcode, avoid glare";
     } else if (video.paused) { try { await video.play(); } catch(e){} }
     camTimer = setTimeout(tick, 120);
   };
   tick();
 }
-let camSession = 0;
+let camSession = 0, lastCode = null, lastAt = 0, audio = null;
+function beep(kind){
+  try{
+    if (!audio) return;
+    const tones = kind === "buy" ? [880, 1320] : kind === "skip" ? [300] : [600];
+    tones.forEach((f, i) => {
+      const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime + i*0.13;
+      o.frequency.value = f; o.type = "square"; g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.25, t+0.01); g.gain.exponentialRampToValueAtTime(0.0001, t+0.11);
+      o.connect(g).connect(audio.destination); o.start(t); o.stop(t+0.12);
+    });
+  }catch(e){}
+}
+function showCamRes(cls, html){ const b = $("#camRes"); b.className = "camres " + cls; b.innerHTML = html; b.hidden = false; }
+async function contLookup(code){
+  showCamRes("wait", `<span class="w">…</span><span class="t">Looking up ${esc(code)}</span><span class="p"></span><span class="s">Keep scanning when this changes</span>`);
+  beep("tick");
+  const r = await lookup(code);
+  if (r && r.stale) return;
+  if (!r || !r.ok || !current){ beep("skip"); showCamRes("skip", `<span class="w">!</span><span class="t">${esc(code)}</span><span class="p"></span><span class="s">${esc((r && r.error) || "Lookup failed")}</span>`); return; }
+  const c = current.calc, p = current.product;
+  beep(c.buy ? "buy" : "skip");
+  if (navigator.vibrate) navigator.vibrate(c.buy ? [60,40,60] : 120);
+  showCamRes(c.buy ? "buy" : "skip", `<span class="w">${c.buy ? "BUY" : "SKIP"}</span><span class="t">${esc(p.title)}</span><span class="p num">${money(c.profit)}</span>
+    <span class="s">${esc(c.why)} · rank ${kfmt(c.pr.rank)} · pulse ${c.pr.pulse} · tap for details</span>`);
+}
+function setContBtn(){ const b = $("#contBtn"); b.setAttribute("aria-pressed", String(S.cont)); b.textContent = "Continuous: " + (S.cont ? "On" : "Off"); }
+$("#contBtn").onclick = () => { S.cont = !S.cont; save(); setContBtn(); };
+$("#camRes").onclick = () => { closeCam(); };   // result is already on the main screen behind
 function closeCam(){
   camSession++;
   clearTimeout(camTimer); camTimer = null;
@@ -872,7 +1117,7 @@ function renderSettings(){
   <div class="card">
     <div class="field">Keepa API key<input id="key" type="password" value="${esc(S.key)}" placeholder="Paste your key" autocomplete="off"></div>
     <div class="note" style="margin-top:6px">Stored only on this phone. Each scan uses about 1 token, plus 2 with buy box on.</div>
-    <div class="row" style="margin-top:10px"><span class="grow">Auto-load live offers (≈12 tokens)</span><label class="switch"><input type="checkbox" id="ao" ${S.autoOffers?"checked":""}><span></span></label></div>
+    <div class="row" style="margin-top:10px"><span class="grow">Auto-load live offers (≈6 tokens per 10 offers)</span><label class="switch"><input type="checkbox" id="ao" ${S.autoOffers?"checked":""}><span></span></label></div>
     <div class="row" style="margin-top:8px"><button class="mini" id="tokBtn">Check tokens</button><span class="note grow" id="tokOut"></span></div>
     <div class="row" style="margin-top:10px"><span class="grow">Buy box prices (+2 tokens)</span><label class="switch"><input type="checkbox" id="bb" ${S.buybox?"checked":""}><span></span></label></div>
   </div>
@@ -883,8 +1128,17 @@ function renderSettings(){
       <label>Default buy cost $<input id="dc" inputmode="decimal" value="${S.defCost}"></label>
     </div>
   </div>
-  <div class="row" style="margin:14px 0 6px"><h2 class="grow" style="margin:0">FBA triggers</h2><span class="note">${S.mode==="triggers"?"Active":"Off (EV mode)"}</span></div>
-  <div class="note" style="margin-bottom:8px">Checked top to bottom. First trigger whose rank and pulse match decides. Red = always skip.</div>
+  <div class="row" style="margin:14px 0 6px"><h2 class="grow" style="margin:0">ROI rule</h2><span class="note">${S.mode==="roi"?"Active":"Tap ROI on the scanner to use"}</span></div>
+  <div class="card trig"><div class="note">BUY when every one of these is true.</div>
+    <div class="trig-grid">
+      <label>Min profit $<input inputmode="decimal" data-roi="minProfit" value="${S.roi.minProfit}"></label>
+      <label>Min ROI %<input inputmode="decimal" data-roi="minRoi" value="${S.roi.minRoi}"></label>
+      <label>Max sales rank<input inputmode="numeric" data-roi="maxRank" value="${S.roi.maxRank}"></label>
+      <label>Min sales in 6 months<input inputmode="numeric" data-roi="minPulse" value="${S.roi.minPulse}"></label>
+    </div></div>
+  <div class="row" style="margin:14px 0 6px"><h2 class="grow" style="margin:0">FBA triggers</h2><span class="note">${S.mode==="triggers"?"Active":"Off"}</span></div>
+  <div class="row card" style="margin-bottom:8px"><span class="grow"><b>Ladder mode</b><br><span class="note">On: a book that misses a tier drops to the next slower tier, which needs more profit. Off: a book must fit a trigger's exact rank and pulse box.</span></span><label class="switch"><input type="checkbox" id="lad" ${S.ladder?"checked":""}><span></span></label></div>
+  <div class="note" style="margin-bottom:8px">Checked top to bottom, so keep the fastest tiers first. Red = always skip.</div>
   <div id="trigs">${S.triggers.map((t,i)=>`<div class="card trig ${t.color==="green"?"":t.color}">
     <div class="row"><input class="grow" data-f="name" data-i="${i}" value="${esc(t.name)}" style="font-weight:700">
       <label class="switch"><input type="checkbox" data-f="on" data-i="${i}" ${t.on?"checked":""}><span></span></label></div>
@@ -898,7 +1152,7 @@ function renderSettings(){
   </div>`).join("")}</div>
   <div class="row" style="gap:8px"><button class="btn" id="addT" style="flex:1">Add trigger</button><button class="btn" id="resetT" style="flex:1">Reset to defaults</button></div>
 
-  <div class="row" style="margin:18px 0 6px"><h2 class="grow" style="margin:0">How often it sells</h2><span class="note">${S.mode==="ev"?"Active":"Off (trigger mode)"}</span></div>
+  <div class="row" style="margin:18px 0 6px"><h2 class="grow" style="margin:0">How often it sells</h2><span class="note">${S.mode==="ev"?"Active":"Off"}</span></div>
   <div class="note" style="margin-bottom:8px">Expected = profit × share sold within 6 months. BUY when expected is at least the amount in its row. Leave blank to pass on that speed.</div>
   <div class="card" style="overflow-x:auto"><table class="ev"><tr><td></td><td class="label" style="text-align:center">% sold 6m</td><td class="label" style="text-align:center">Keep $</td></tr>
   ${S.ev.map((r,i)=>`<tr><td>${r.label}<small>${r.sub}</small></td>
@@ -909,6 +1163,8 @@ function renderSettings(){
   $("#key").onchange = e => { S.key = e.target.value.trim(); save(); toast("Key saved"); };
   $("#bb").onchange = e => { S.buybox = e.target.checked; save(); };
   $("#ao").onchange = e => { S.autoOffers = e.target.checked; save(); };
+  $("#lad").onchange = e => { S.ladder = e.target.checked; save(); };
+  document.querySelectorAll("[data-roi]").forEach(el => el.onchange = () => { S.roi[el.dataset.roi] = num(el); save(); });
   $("#tokBtn").onclick = async () => { $("#tokOut").textContent = "Checking…"; const t = await keepaTokens(); $("#tokOut").textContent = t && t.tokensLeft!=null ? `${t.tokensLeft} left · refills ${t.refillRate}/min` + (t.refillIn ? ` · next in ${Math.ceil(t.refillIn/1000)}s` : "") : (t && t.error ? (t.error.message||"Key rejected") : "Couldn't reach Keepa"); };
   $("#inb").onchange = e => { S.inbound = num(e.target, .4); save(); };
   $("#prep").onchange = e => { S.prep = num(e.target); save(); };
@@ -925,10 +1181,12 @@ function renderSettings(){
   });
   document.querySelectorAll("[data-up]").forEach(b => b.onclick = () => { const i=+b.dataset.up; if(i>0){ [S.triggers[i-1],S.triggers[i]]=[S.triggers[i],S.triggers[i-1]]; save(); renderSettings(); } });
   document.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { if (b.dataset.sure){ S.triggers.splice(+b.dataset.rm,1); save(); renderSettings(); } else { b.dataset.sure="1"; b.textContent="Tap again"; } });
-  $("#addT").onclick = () => { S.triggers.push({name:"New trigger",on:true,color:"green",rMin:1,rMax:500000,pMin:1,pMax:186,minProfit:5}); save(); renderSettings(); };
+  $("#addT").onclick = () => { S.triggers.push({name:"New trigger",on:true,color:"green",rMin:1,rMax:500000,pMin:1,pMax:9999,minProfit:5}); save(); renderSettings(); };
   $("#resetT").onclick = e => { const b=e.target; if (b.dataset.sure){ S.triggers=JSON.parse(JSON.stringify(DEFAULT_TRIGGERS)); S.ev=JSON.parse(JSON.stringify(DEFAULT_EV)); save(); renderSettings(); } else { b.dataset.sure="1"; b.textContent="Tap again to reset"; } };
 }
 
+// drop expired offer caches so storage doesn't grow
+try { for (let i = localStorage.length-1; i >= 0; i--){ const k = localStorage.key(i); if (k && k.startsWith("scout.offers.")){ const v = JSON.parse(localStorage.getItem(k)); if (!v || Date.now()-v.t > OFFER_TTL) localStorage.removeItem(k); } } } catch(e){}
 setTab("scan");
 </script>
 </body>
