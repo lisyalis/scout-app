@@ -246,9 +246,13 @@ function showFatal(msg){
   b.textContent = "App error: " + msg + "  (tap to close, screenshot it for Claude)";
 }
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
-window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
+window.addEventListener("unhandledrejection", e => {
+  const msg = String(e.reason && (e.reason.message || e.reason));
+  if (/audio|AudioContext|speech|play\(\)|NotAllowedError|interrupted/i.test(msg)){ e.preventDefault(); return; }   // sound hiccups aren't app errors
+  showFatal(msg);
+});
 
-const APP_VERSION = "2026-10-26h";
+const APP_VERSION = "2026-10-26i";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1216,7 +1220,7 @@ async function openCam(mode){
     try { const f = await BarcodeDetector.getSupportedFormats(); native = f.includes("ean_13") ? new BarcodeDetector({formats:["ean_13","upc_a","upc_e","ean_8"].filter(x => f.includes(x))}) : false; } catch(e){ native = false; }
   }
   clearTimeout(camTimer); camTimer = null;
-  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === "suspended") audio.resume(); } catch(e){}
+
   setContBtn(); $("#camRes").hidden = true; lastCode = null;
   $("#cam").hidden = false;
   setModeBtn();
@@ -1263,8 +1267,7 @@ async function openCam(mode){
 let camSession = 0, lastCode = null, lastAt = 0, audio = null, lastBarcodeTry = 0;
 function beep(kind){
   try{
-    if (!audio) unlockAudio();
-    if (!audio) return;
+    if (!audio || audio.state !== "running"){ startAudio(); if (!beep.retry){ beep.retry = true; setTimeout(() => { beep.retry = false; if (audio && audio.state === "running") beep(kind); }, 200); } return; }
     const tones = kind === "buy" ? [880, 1320] : kind === "skip" ? [220] : kind === "error" ? [200, 200, 200] : [600];
     tones.forEach((f, i) => {
       const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime + i*0.13;
@@ -1277,8 +1280,19 @@ function beep(kind){
   }catch(e){}
 }
 // BUY/SKIP sounds. iPhone only allows sound after you've touched the screen once, so unlock on the first tap or key.
+// Start sound safely: if iPhone refuses ("Failed to start the audio device"), drop it quietly and try again on the next tap.
+function startAudio(){
+  try{
+    if (audio && audio.state === "closed") audio = null;
+    if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state !== "running"){
+      const p = audio.resume();
+      if (p && p.catch) p.catch(() => { try { audio.close(); } catch(e){} audio = null; });
+    }
+  }catch(e){ audio = null; }
+}
 function unlockAudio(){
-  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === "suspended") audio.resume(); } catch(e){}
+  startAudio();
   try { if (window.speechSynthesis && !unlockAudio.spoke){ const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); unlockAudio.spoke = true; } } catch(e){}
 }
 document.addEventListener("pointerdown", unlockAudio, {passive:true});
