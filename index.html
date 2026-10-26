@@ -252,7 +252,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-26k";
+const APP_VERSION = "2026-10-26l";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1301,28 +1301,23 @@ function makeWav(tones, wave){
   let bin = ""; const bytes = new Uint8Array(buf); for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000));
   return "data:audio/wav;base64," + btoa(bin);
 }
-const CLIPS = {};
-function clip(kind){
-  if (!CLIPS[kind]){
-    // just two sounds: BUY = one high ding, SKIP = one low buzz (errors use the SKIP sound)
-    if (kind !== "buy") kind = "skip";
-    if (CLIPS[kind]) return CLIPS[kind];
-    const spec = {buy:[[[1320,.22]],"sine"], skip:[[[180,.32]],"saw"]}[kind];
-    const a = new Audio(makeWav(spec[0], spec[1])); a.preload = "auto"; a.setAttribute("playsinline", ""); CLIPS[kind] = a;
-  }
-  return CLIPS[kind];
+// One shared player: unlocked on your first tap with a SILENT clip, then reused for the BUY or SKIP sound.
+const CLIP_SRC = {};
+function clipSrc(kind){
+  kind = kind === "buy" ? "buy" : "skip";                       // just two sounds: BUY = high ding, SKIP = low buzz
+  if (!CLIP_SRC[kind]) CLIP_SRC[kind] = kind === "buy" ? makeWav([[1320,.22]], "sine") : makeWav([[180,.32]], "saw");
+  return CLIP_SRC[kind];
 }
-let clipsUnlocked = false;
+let player = null, clipsUnlocked = false;
+const SILENT = makeWav([[0,.05]], "sine");
+function getPlayer(){ if (!player){ player = new Audio(); player.preload = "auto"; player.setAttribute("playsinline", ""); } return player; }
 function unlockClips(){
   if (clipsUnlocked) return;
   try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch(e){}   // newer iPhones: ignore the silent switch
-  ["buy","skip"].forEach(k => {
-    const a = clip(k); a.muted = true;
-    const p = a.play(); if (p && p.then) p.then(() => { a.pause(); a.currentTime = 0; a.muted = false; clipsUnlocked = true; }).catch(() => { a.muted = false; });
-  });
+  try { const a = getPlayer(); a.src = SILENT; const p = a.play(); if (p && p.then) p.then(() => { clipsUnlocked = true; }).catch(() => {}); } catch(e){}
 }
 function playClip(kind){
-  try { const a = clip(kind); a.muted = false; a.currentTime = 0; const p = a.play(); if (p && p.catch) p.catch(() => {}); return true; } catch(e){ return false; }
+  try { const a = getPlayer(); a.pause(); a.src = clipSrc(kind); a.currentTime = 0; const p = a.play(); if (p && p.catch) p.catch(() => {}); return true; } catch(e){ return false; }
 }
 // Start sound safely: if iPhone refuses ("Failed to start the audio device"), drop it quietly and try again on the next tap.
 function startAudio(){
