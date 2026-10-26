@@ -150,7 +150,7 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .cam-bar .btn{padding:9px 12px;font-size:14px}
 .cam-bar{flex-wrap:wrap}
 #camHint{flex-basis:100%;font-size:14px}
-#cam.text .reticle{top:44%;height:12%;left:6%;right:6%}
+#cam.text .reticle{top:40%;height:20%;left:8%;right:8%}
 #zoomBtn[hidden]{display:none}
 #modeBtn[data-mode="text"]{background:var(--blue);color:#06202c;border-color:var(--blue)}
 #contBtn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -230,7 +230,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-25g";
+const APP_VERSION = "2026-10-25h";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1031,7 +1031,7 @@ let liveBusy = false, liveLoading = false;
 function setModeBtn(){
   const b = $("#modeBtn"); b.dataset.mode = S.camMode; b.textContent = S.camMode === "text" ? "ISBN text" : "Barcode";
   $("#cam").classList.toggle("text", S.camMode === "text");
-  $("#camHint").textContent = S.camMode === "text" ? "Fit the ISBN line inside the box (copyright page or back cover)" : "Point at the barcode";
+  $("#camHint").textContent = S.camMode === "text" ? "Reading… hold steady, fill the box with the ISBN line." : "Point at the barcode";
 }
 $("#modeBtn").onclick = () => { S.camMode = S.camMode === "text" ? "barcode" : "text"; save(); setModeBtn(); applyZoom(); };
 // camera zoom (works on newer iPhones; hidden when the phone doesn't allow it)
@@ -1040,8 +1040,8 @@ function zoomCaps(){ try { const tr = stream && stream.getVideoTracks()[0]; cons
 async function applyZoom(){
   const z = zoomCaps(), b = $("#zoomBtn");
   if (!z){ b.hidden = true; return; }
-  b.hidden = S.camMode !== "text";
-  const want = S.camMode === "text" ? Math.min(z.max, Math.max(z.min, zoomLevel)) : z.min;
+  b.hidden = true;                                                      // no zoom, same as ISBN Scout
+  const want = z.min;
   b.textContent = (S.camMode === "text" ? zoomLevel : 1) + "x";
   try { await z.tr.applyConstraints({advanced:[{zoom: want}]}); } catch(e){}
 }
@@ -1055,11 +1055,11 @@ function handleCode(code, session){
 }
 // Same method as ISBN Scout's live reader: normal text reading (no numbers-only mode), the guide strip
 // enlarged to at least 1400px, a simple contrast boost, and an ISBN only counts once it's read twice.
-const GUIDE = {x:0.06, y:0.44, w:0.88, h:0.12};   // one text line tall; must match the #cam.text .reticle box
+const GUIDE = {x:0.08, y:0.40, w:0.84, h:0.20};   // same box as ISBN Scout; must match the #cam.text .reticle box
 function grabStrip(video){
   const vw = video.videoWidth, vh = video.videoHeight;
   const sx = vw*GUIDE.x, sy = vh*GUIDE.y, sw = vw*GUIDE.w, sh = vh*GUIDE.h;
-  const scale = Math.max(1, 1400/sw, 160/sh);                           // enlarge small text, never shrink
+  const scale = Math.max(1, 1400/sw);                                   // upscale small text
   const c = canvasOf(sw*scale, sh*scale), g = c.getContext("2d", {willReadFrequently:true});
   g.imageSmoothingQuality = "high";
   g.drawImage(video, sx, sy, sw, sh, 0, 0, c.width, c.height);
@@ -1072,32 +1072,43 @@ function grabStrip(video){
   g.putImageData(px,0,0);
   return c;
 }
+// ISBN Scout's ISBN finder (same code): check digits filter out misreads, always returns ISBN-13
+function valid13(s){ if (!/^97[89][0-9]{10}$/.test(s)) return false; let t=0; for (let i=0;i<12;i++) t += (+s[i])*(i%2?3:1); return (10 - t%10)%10 === +s[12]; }
+function valid10(s){ if (!/^[0-9]{9}[0-9X]$/.test(s)) return false; let t=0; for (let i=0;i<10;i++) t += (s[i]==="X"?10:+s[i])*(10-i); return t%11 === 0; }
+function to13(s){
+  s = String(s||"").replace(/[^0-9X]/gi,"").toUpperCase();
+  if (valid13(s)) return s;
+  if (valid10(s)){ const b = "978" + s.slice(0,9); let t=0; for (let i=0;i<12;i++) t += (+b[i])*(i%2?3:1); return b + ((10 - t%10)%10); }
+  return null;
+}
+function findIsbns(text){
+  const found = [];
+  const lines = text.toUpperCase().replace(/[OQD]/g, "0").replace(/[IL|]/g, "1").replace(/S/g, "5").split(/\n/);
+  // Prefer lines that mention ISBN, then everything else
+  lines.sort((a, b) => (/15BN/.test(b) || /ISBN/.test(b)) - (/15BN/.test(a) || /ISBN/.test(a)));
+  for (const line of lines){
+    const s = line.replace(/[^0-9X]/g, "");
+    for (let i = 0; i + 13 <= s.length; i++){ const c = s.slice(i, i + 13); if (valid13(c) && !found.includes(c)) found.push(c); }
+    for (let i = 0; i + 10 <= s.length; i++){ const c = to13(s.slice(i, i + 10)); if (c && valid10(s.slice(i, i + 10)) && !found.includes(c)) found.push(c); }
+  }
+  return found;
+}
 function readIsbnLive(video, session){
   liveBusy = true;
   (async () => {
     try{
       if (!window.Tesseract || !ocrWorker){
-        if (!liveLoading){ liveLoading = true; $("#camHint").textContent = "Loading the text reader (first time only)…"; }
+        if (!liveLoading){ liveLoading = true; $("#camHint").textContent = "Loading text reader (first time takes a few seconds)…"; }
       }
       const w = await getOcr(() => {});
-      if (liveLoading){ liveLoading = false; if (session === camSession) setModeBtn(); }
+      if (liveLoading){ liveLoading = false; if (session === camSession) $("#camHint").textContent = "Reading… hold steady, fill the box with the ISBN line."; }
       if (session !== camSession || S.camMode !== "text") return;
-      liveFrame = (liveFrame + 1) % 2;
-      const strip = grabStrip(video);
-      let r;
-      if (liveFrame === 0){ await ocrMode(w, "default"); r = await capped(w.recognize(strip), 8000); }
-      else { await ocrMode(w, "digits"); r = await capped(w.recognize(binarize(strip)), 8000); }   // numbers-only on black-and-white
+      await ocrMode(w, "default");
+      const r = await capped(w.recognize(grabStrip(video)), 8000);
       if (!r || session !== camSession || S.camMode !== "text") return;
-      const text = r.data.text || "";
-      const c = isbnCandidates(text, true);
-      for (const isbn of c.exact){
+      for (const isbn of findIsbns(r.data.text || "")){
         liveSeen[isbn] = (liveSeen[isbn] || 0) + 1;
         if (liveSeen[isbn] >= 2){ liveSeen = {}; await handleCode(isbn, session); return; }   // same ISBN read twice = confirmed
-      }
-      if (c.exact.length && session === camSession){ $("#camHint").textContent = "Checking " + c.exact[0] + "… hold steady"; return; }
-      if (liveFrame === 0 && session === camSession && !liveLoading){
-        const line = text.split(/\n/).map(x => x.trim()).filter(Boolean).sort((a,b) => b.length-a.length)[0] || "";
-        $("#camHint").textContent = line ? "Seeing: " + line.slice(0,34) + (/[0-9]{3}/.test(line) ? "  (hold steady)" : "  (move to the ISBN line)") : "Fit just the ISBN line in the box";
       }
     }catch(e){ /* keep trying on the next frame */ }
     finally{ setTimeout(() => { liveBusy = false; }, 150); }
@@ -1135,7 +1146,7 @@ async function openCam(mode){
   let n = 0;
   const tick = async () => {
     if (session !== camSession || $("#cam").hidden || !streamLive()) return;
-    if (video.readyState >= 2 && video.videoWidth && S.camMode === "text" && Date.now() - lastBarcodeTry < 1000){
+    if (video.readyState >= 2 && video.videoWidth && S.camMode === "text"){
       if (!liveBusy) readIsbnLive(video, session);
     } else if (video.readyState >= 2 && video.videoWidth){
       lastBarcodeTry = Date.now();
