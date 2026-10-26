@@ -228,7 +228,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-25c";
+const APP_VERSION = "2026-10-25d";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1042,26 +1042,36 @@ function readIsbnLive(video, session){
       await ocrMode(w, "digits");
       const vw = video.videoWidth, vh = video.videoHeight;
       const cw = Math.round(vw*0.9), ch = Math.round(vh*0.18), cx = Math.round((vw-cw)/2), cy = Math.round(vh*0.41);
-      const k = Math.min(2, 1400/cw);
+      const k = Math.min(1.5, 1000/cw);                                  // smaller image = faster read
       const cv = canvasOf(cw*k, ch*k), g = cv.getContext("2d"); g.imageSmoothingQuality = "high";
       g.drawImage(video, cx, cy, cw, ch, 0, 0, cv.width, cv.height);
       grayInPlace(cv);
-      liveFrame = (liveFrame + 1) % 2;
-      const img = liveFrame ? binarize(cv) : cv;
+      liveFrame = (liveFrame + 1) % 3;
+      const img = liveFrame === 2 ? binarize(cv) : cv;                   // mostly gray frames; every third black-and-white
       const r = await capped(w.recognize(img), 6000);
       if (!r || session !== camSession || S.camMode !== "text") return;
       const text = r.data.text || "";
       const c = isbnCandidates(text);
-      if (c.exact.length){ await handleCode(c.exact[0], session); return; }
+      if (c.exact.length){
+        // only trust an ISBN once it has been read the same way twice within 5 seconds
+        const now = Date.now(), isbn = c.exact[0];
+        liveReads = liveReads.filter(x => now - x.t < 5000);
+        const agree = liveReads.some(x => x.isbn === isbn);
+        liveReads.push({isbn, t:now});
+        if (agree){ liveReads = []; await handleCode(isbn, session); return; }
+        if (session === camSession) $("#camHint").textContent = "Checking " + isbn + "… hold steady";
+        return;
+      }
       const digits = (text.match(/[0-9X][0-9X \-]{5,}/g) || []).sort((a,b) => b.length-a.length)[0];
       if (digits && session === camSession && !liveLoading) $("#camHint").textContent = "Reading… " + digits.trim().slice(0,22) + "  (hold steady)";
     }catch(e){ /* keep trying on the next frame */ }
     finally{ liveBusy = false; }
   })();
 }
-let liveFrame = 0;
+let liveFrame = 0, liveReads = [];
 async function openCam(mode){
   if (mode) { S.camMode = mode; save(); }
+  liveReads = [];
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Live camera needs https. Use the photo option."); return; }
   if (!window.ZXing && !("BarcodeDetector" in window)){ toast("Scanner library didn't load. Reload the page."); return; }
   if (native === null && "BarcodeDetector" in window){
