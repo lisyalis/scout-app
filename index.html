@@ -140,7 +140,19 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 /* camera overlay */
 .cam-wrap{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column}
 .cam-wrap video{flex:1;width:100%;object-fit:cover;min-height:0}
-.reticle{position:absolute;left:15%;right:15%;top:40%;height:18%;border:3px solid var(--accent);border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.35)}
+/* barcode box: same as ISBN Scout (green corners, red sweeping laser, darkened outside) */
+.reticle{position:absolute;left:5%;right:5%;top:30%;height:40%;border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.5);
+  background:
+    linear-gradient(#4ade80,#4ade80) left top/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) left top/4px 26px no-repeat,
+    linear-gradient(#4ade80,#4ade80) right top/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) right top/4px 26px no-repeat,
+    linear-gradient(#4ade80,#4ade80) left bottom/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) left bottom/4px 26px no-repeat,
+    linear-gradient(#4ade80,#4ade80) right bottom/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) right bottom/4px 26px no-repeat}
+.reticle::after{content:"";position:absolute;left:6%;right:6%;top:50%;height:2px;background:#ff3b30;box-shadow:0 0 12px 2px rgba(255,59,48,.7);animation:sweep 1.6s ease-in-out infinite alternate}
+@keyframes sweep{from{top:22%}to{top:78%}}
+@media (prefers-reduced-motion:reduce){.reticle::after{animation:none}}
+#cam.text .reticle{background:none;border:3px solid #facc15}
+#cam.text .reticle::after{display:none}
+#torchBtn[hidden]{display:none}
 .camres{position:absolute;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));top:calc(12px + env(safe-area-inset-top,0px));border-radius:14px;padding:12px 14px;display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px;align-items:center;text-align:left;color:#111;background:#9aa3ad;box-shadow:0 6px 24px rgba(0,0,0,.4)}
 .camres.buy{background:var(--buy);color:#05230f}.camres.skip{background:var(--skip);color:#2a0705}.camres.wait{background:var(--panel2);color:var(--fg)}
 .camres .w{font:700 34px/1 var(--display);grid-row:span 2}
@@ -150,9 +162,9 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .cam-bar .btn{padding:9px 12px;font-size:14px}
 .cam-bar{flex-wrap:wrap}
 #camHint{flex-basis:100%;font-size:14px}
-#cam.text .reticle{top:40%;height:20%;left:8%;right:8%;border-color:#facc15;border-radius:14px;box-shadow:none}
-.guide-label{position:absolute;left:8%;right:8%;bottom:calc(100% - 40% + 10px);text-align:center;color:#fff;font-weight:600;font-size:16px;text-shadow:0 1px 4px rgba(0,0,0,.7);pointer-events:none;display:none}
-#cam.text .guide-label{display:block}
+#cam.text .reticle{top:40%;height:20%;left:8%;right:8%;border-radius:14px;box-shadow:none}
+.guide-label{position:absolute;left:5%;right:5%;bottom:calc(100% - 30% + 10px);text-align:center;color:#fff;font-weight:600;font-size:15px;text-shadow:0 1px 4px rgba(0,0,0,.7);pointer-events:none}
+#cam.text .guide-label{left:8%;right:8%;bottom:calc(100% - 40% + 10px);font-size:16px}
 #zoomBtn[hidden]{display:none}
 #modeBtn[data-mode="text"]{background:var(--blue);color:#06202c;border-color:var(--blue)}
 #contBtn[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
@@ -212,11 +224,12 @@ table.ev small{color:var(--muted);display:block}
 <div class="cam-wrap" id="cam" hidden>
   <video id="video" autoplay playsinline muted></video>
   <div class="reticle"></div>
-  <div class="guide-label">Line up the ISBN number inside the box</div>
+  <div class="guide-label" id="guideLabel">Fit the barcode inside the box</div>
   <button class="camres" id="camRes" hidden></button>
   <div class="cam-bar"><span id="camHint">Point at the barcode</span>
     <button class="btn" id="modeBtn" data-mode="barcode">Barcode</button>
     <button class="btn" id="zoomBtn" hidden>2x</button>
+    <button class="btn" id="torchBtn" hidden>Light</button>
     <button class="btn" id="contBtn" aria-pressed="false">Continuous: Off</button>
     <button class="btn" id="camClose">Done</button></div>
 </div>
@@ -233,7 +246,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-26a";
+const APP_VERSION = "2026-10-26b";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1005,6 +1018,29 @@ function wireVisual(){
 // Uses the native BarcodeDetector when the browser has one (faster), ZXing otherwise.
 const FORMATS = () => [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.CODE_128];
 let stream = null, camTimer = null, zx = null, native = null;
+// ISBN Scout's barcode decoder: ZXing on the box area, luminance computed directly, retail/book formats only
+let scoutZx = null;
+function getScoutZx(){
+  if (scoutZx || typeof ZXing === "undefined") return scoutZx;
+  const hints = new Map();
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.EAN_8]);
+  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  scoutZx = new ZXing.MultiFormatReader(); scoutZx.setHints(hints);
+  return scoutZx;
+}
+const scanCanvas = document.createElement("canvas");
+function zxDecodeBox(video){
+  const {sx, sy, sw, sh} = boxInVideo(video);
+  const scale = Math.min(1, 1280/sw);
+  const w = Math.round(sw*scale), h = Math.round(sh*scale);
+  scanCanvas.width = w; scanCanvas.height = h;
+  const g = scanCanvas.getContext("2d", {willReadFrequently:true});
+  g.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+  const d = g.getImageData(0,0,w,h).data, lum = new Uint8ClampedArray(w*h);
+  for (let i = 0, j = 0; j < lum.length; i += 4, j++) lum[j] = (d[i]*77 + d[i+1]*150 + d[i+2]*29) >> 8;
+  try { return getScoutZx().decodeWithState(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.RGBLuminanceSource(lum, w, h)))).getText(); }
+  catch(e){ return null; }   // nothing found in this frame
+}
 function makeZx(){
   const r = new ZXing.MultiFormatReader();
   const h = new Map();
@@ -1034,7 +1070,8 @@ let liveBusy = false, liveLoading = false;
 function setModeBtn(){
   const b = $("#modeBtn"); b.dataset.mode = S.camMode; b.textContent = S.camMode === "text" ? "ISBN text" : "Barcode";
   $("#cam").classList.toggle("text", S.camMode === "text");
-  $("#camHint").textContent = S.camMode === "text" ? "Reading… hold steady, fill the box with the ISBN line." : "Point at the barcode";
+  $("#guideLabel").textContent = S.camMode === "text" ? "Line up the ISBN number inside the box" : "Fit the barcode inside the box";
+  $("#camHint").textContent = S.camMode === "text" ? "Reading… hold steady, fill the box with the ISBN line." : "";
 }
 $("#modeBtn").onclick = () => { S.camMode = S.camMode === "text" ? "barcode" : "text"; save(); setModeBtn(); applyZoom(); };
 // camera zoom (works on newer iPhones; hidden when the phone doesn't allow it)
@@ -1048,6 +1085,9 @@ async function applyZoom(){
   b.textContent = (S.camMode === "text" ? zoomLevel : 1) + "x";
   try { await z.tr.applyConstraints({advanced:[{zoom: want}]}); } catch(e){}
 }
+let torchOn = false;
+function setTorchBtn(){ try { const tr = stream && stream.getVideoTracks()[0]; const c = tr && tr.getCapabilities ? tr.getCapabilities() : {}; $("#torchBtn").hidden = !c.torch; } catch(e){ $("#torchBtn").hidden = true; } $("#torchBtn").textContent = torchOn ? "Light off" : "Light"; }
+$("#torchBtn").onclick = async () => { try { const tr = stream.getVideoTracks()[0]; torchOn = !torchOn; await tr.applyConstraints({advanced:[{torch: torchOn}]}); } catch(e){ torchOn = false; } setTorchBtn(); };
 $("#zoomBtn").onclick = () => { zoomLevel = zoomLevel >= 3 ? 1 : zoomLevel + 1; LS.set("zoom1", zoomLevel); applyZoom(); };
 function handleCode(code, session){
   if (session !== camSession) return Promise.resolve(false);
@@ -1134,7 +1174,7 @@ async function openCam(mode){
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Live camera needs https. Use the photo option."); return; }
   if (!window.ZXing && !("BarcodeDetector" in window)){ toast("Scanner library didn't load. Reload the page."); return; }
   if (native === null && "BarcodeDetector" in window){
-    try { native = new BarcodeDetector({formats:["ean_13","upc_a","ean_8","upc_e","code_128"]}); } catch(e){ native = false; }
+    try { const f = await BarcodeDetector.getSupportedFormats(); native = f.includes("ean_13") ? new BarcodeDetector({formats:["ean_13","upc_a","upc_e","ean_8"].filter(x => f.includes(x))}) : false; } catch(e){ native = false; }
   }
   clearTimeout(camTimer); camTimer = null;
   try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === "suspended") audio.resume(); } catch(e){}
@@ -1150,7 +1190,7 @@ async function openCam(mode){
     try { const tr = stream.getVideoTracks()[0]; const caps = tr.getCapabilities ? tr.getCapabilities() : {};
           if (caps.focusMode && caps.focusMode.includes("continuous")) await tr.applyConstraints({advanced:[{focusMode:"continuous"}]}); } catch(e){}
   }
-  applyZoom();
+  applyZoom(); setTorchBtn();
   const video = freshVideo();
   video.srcObject = stream;
   try { await video.play(); } catch(e){}
@@ -1163,19 +1203,12 @@ async function openCam(mode){
       if (!liveBusy) readIsbnLive(video, session);
     } else if (video.readyState >= 2 && video.videoWidth){
       lastBarcodeTry = Date.now();
-      const vw = video.videoWidth, vh = video.videoHeight;
-      // scan what's inside the box on screen, plus a small margin
-      const bx = boxInVideo(video), mx = bx.sw*0.12, my = bx.sh*0.35;
-      const cx = Math.max(0, Math.round(bx.sx - mx)), cy = Math.max(0, Math.round(bx.sy - my));
-      const cw = Math.min(vw - cx, Math.round(bx.sw + mx*2)), ch = Math.min(vh - cy, Math.round(bx.sh + my*2));
-      const scale = Math.min(1, 1280/cw);
-      cv.width = Math.round(cw*scale); cv.height = Math.round(ch*scale);
-      g.drawImage(video, cx, cy, cw, ch, 0, 0, cv.width, cv.height);
+      // same as ISBN Scout: phone's own detector on the frame when it has one, otherwise ZXing on the box
       let code = null;
       try{
-        if (native){ const r = await native.detect(cv); if (r && r.length) code = r[0].rawValue; }
-        else if (window.ZXing) code = decodeCanvas(cv);
-      }catch(e){ zx = null; }   // rebuild the decoder if it ever gets into a bad state
+        if (native){ const r = await native.detect(video); if (r && r.length) code = r[0].rawValue; }
+        else if (window.ZXing) code = zxDecodeBox(video);
+      }catch(e){ scoutZx = null; }
       if (session !== camSession) return;
       if (code){
         const keepGoing = await handleCode(code, session);
@@ -1184,7 +1217,7 @@ async function openCam(mode){
       if (S.camMode === "text" && !liveBusy) readIsbnLive(video, session);
       if (++n === 40 && S.camMode !== "text") $("#camHint").textContent = "Hold steady, fill the box with the barcode, avoid glare";
     } else if (video.paused) { try { await video.play(); } catch(e){} }
-    camTimer = setTimeout(tick, 120);
+    camTimer = setTimeout(tick, S.camMode === "text" ? 120 : (native ? 80 : 30));   // ISBN Scout's barcode speed
   };
   tick();
 }
@@ -1219,6 +1252,7 @@ $("#contBtn").onclick = () => { S.cont = !S.cont; save(); setContBtn(); };
 $("#camRes").onclick = () => { closeCam(); };   // result is already on the main screen behind
 function closeCam(){
   camSession++;
+  if (torchOn){ torchOn = false; try { stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:false}]}); } catch(e){} }
   clearTimeout(camTimer); camTimer = null;
   const v = $("#video"); try { v.pause(); } catch(e){}
   $("#cam").hidden = true;
