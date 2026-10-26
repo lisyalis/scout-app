@@ -226,7 +226,7 @@ table.ev small{color:var(--muted);display:block}
   <div class="reticle"></div>
   <div class="guide-label" id="guideLabel">Fit the barcode inside the box</div>
   <button class="camres" id="camRes" hidden></button>
-  <div class="cam-bar"><span id="camHint">Point at the barcode</span>
+  <div class="cam-bar"><span id="camHint"></span>
     <button class="btn" id="modeBtn" data-mode="barcode">Barcode</button>
     <button class="btn" id="zoomBtn" hidden>2x</button>
     <button class="btn" id="torchBtn" hidden>Light</button>
@@ -246,7 +246,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-26c";
+const APP_VERSION = "2026-10-26d";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1071,7 +1071,7 @@ function setModeBtn(){
   const b = $("#modeBtn"); b.dataset.mode = S.camMode; b.textContent = S.camMode === "text" ? "ISBN text" : "Barcode";
   $("#cam").classList.toggle("text", S.camMode === "text");
   $("#guideLabel").textContent = S.camMode === "text" ? "Line up the ISBN number inside the box" : "Fit the barcode inside the box";
-  $("#camHint").textContent = S.camMode === "text" ? "Reading… hold steady, fill the box with the ISBN line." : "";
+  $("#camHint").textContent = S.camMode === "text" ? "Scanning automatically…" : "";
 }
 $("#modeBtn").onclick = () => { S.camMode = S.camMode === "text" ? "barcode" : "text"; save(); setModeBtn(); applyZoom(); };
 // camera zoom (works on newer iPhones; hidden when the phone doesn't allow it)
@@ -1154,7 +1154,7 @@ function readIsbnLive(video, session){
         if (!liveLoading){ liveLoading = true; $("#camHint").textContent = "Loading text reader (first time takes a few seconds)…"; }
       }
       const w = await getOcr(() => {});
-      if (liveLoading){ liveLoading = false; if (session === camSession) $("#camHint").textContent = "Reading… hold steady, fill the box with the ISBN line."; }
+      if (liveLoading){ liveLoading = false; if (session === camSession) $("#camHint").textContent = "Scanning automatically…"; }
       if (session !== camSession || S.camMode !== "text") return;
       await ocrMode(w, "default");
       const r = await capped(w.recognize(grabStrip(video)), 8000);
@@ -1215,7 +1215,6 @@ async function openCam(mode){
         if (!keepGoing || session !== camSession) return;
       }
       if (S.camMode === "text" && !liveBusy) readIsbnLive(video, session);
-      if (++n === 40 && S.camMode !== "text") $("#camHint").textContent = "Hold steady, fill the box with the barcode, avoid glare";
     } else if (video.paused) { try { await video.play(); } catch(e){} }
     camTimer = setTimeout(tick, S.camMode === "text" ? 120 : (native ? 80 : 30));   // ISBN Scout's barcode speed
   };
