@@ -252,7 +252,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-26i";
+const APP_VERSION = "2026-10-26j";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1266,6 +1266,7 @@ async function openCam(mode){
 }
 let camSession = 0, lastCode = null, lastAt = 0, audio = null, lastBarcodeTry = 0;
 function beep(kind){
+  if (playClip(kind)) return;
   try{
     if (!audio || audio.state !== "running"){ startAudio(); if (!beep.retry){ beep.retry = true; setTimeout(() => { beep.retry = false; if (audio && audio.state === "running") beep(kind); }, 200); } return; }
     const tones = kind === "buy" ? [880, 1320] : kind === "skip" ? [220] : kind === "error" ? [200, 200, 200] : [600];
@@ -1280,6 +1281,46 @@ function beep(kind){
   }catch(e){}
 }
 // BUY/SKIP sounds. iPhone only allows sound after you've touched the screen once, so unlock on the first tap or key.
+// Real sound clips (WAV made in the page). iPhone plays these like music, so the silent switch doesn't mute them,
+// unlike Web Audio beeps. Each clip is unlocked once by your first tap, then plays on its own after that.
+function makeWav(tones, wave){
+  const rate = 22050, parts = [];
+  for (const [f, dur] of tones){
+    const n = Math.round(rate*dur);
+    for (let i = 0; i < n; i++){
+      const t = i/rate, env = Math.min(1, i/(rate*0.005), (n-i)/(rate*0.02));
+      let v = Math.sin(2*Math.PI*f*t);
+      if (wave === "square") v = v >= 0 ? 0.6 : -0.6; else if (wave === "saw") v = 1.2*((f*t) % 1) - 0.6;
+      parts.push(f ? v*env*0.8 : 0);
+    }
+  }
+  const len = parts.length, buf = new ArrayBuffer(44 + len*2), dv = new DataView(buf), str = (o, x) => { for (let i=0;i<x.length;i++) dv.setUint8(o+i, x.charCodeAt(i)); };
+  str(0,"RIFF"); dv.setUint32(4, 36+len*2, true); str(8,"WAVEfmt "); dv.setUint32(16,16,true); dv.setUint16(20,1,true); dv.setUint16(22,1,true);
+  dv.setUint32(24,rate,true); dv.setUint32(28,rate*2,true); dv.setUint16(32,2,true); dv.setUint16(34,16,true); str(36,"data"); dv.setUint32(40,len*2,true);
+  for (let i = 0; i < len; i++) dv.setInt16(44+i*2, Math.max(-1, Math.min(1, parts[i]))*32767, true);
+  let bin = ""; const bytes = new Uint8Array(buf); for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i+0x8000));
+  return "data:audio/wav;base64," + btoa(bin);
+}
+const CLIPS = {};
+function clip(kind){
+  if (!CLIPS[kind]){
+    const spec = {buy:[[[880,.11],[0,.03],[1320,.14]],"square"], skip:[[[220,.30]],"saw"], error:[[[200,.09],[0,.05],[200,.09],[0,.05],[200,.09]],"saw"], tick:[[[600,.05]],"square"]}[kind];
+    const a = new Audio(makeWav(spec[0], spec[1])); a.preload = "auto"; a.setAttribute("playsinline", ""); CLIPS[kind] = a;
+  }
+  return CLIPS[kind];
+}
+let clipsUnlocked = false;
+function unlockClips(){
+  if (clipsUnlocked) return;
+  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch(e){}   // newer iPhones: ignore the silent switch
+  ["buy","skip","error","tick"].forEach(k => {
+    const a = clip(k); a.muted = true;
+    const p = a.play(); if (p && p.then) p.then(() => { a.pause(); a.currentTime = 0; a.muted = false; clipsUnlocked = true; }).catch(() => { a.muted = false; });
+  });
+}
+function playClip(kind){
+  try { const a = clip(kind); a.muted = false; a.currentTime = 0; const p = a.play(); if (p && p.catch) p.catch(() => {}); return true; } catch(e){ return false; }
+}
 // Start sound safely: if iPhone refuses ("Failed to start the audio device"), drop it quietly and try again on the next tap.
 function startAudio(){
   try{
@@ -1292,10 +1333,13 @@ function startAudio(){
   }catch(e){ audio = null; }
 }
 function unlockAudio(){
+  unlockClips();
   startAudio();
   try { if (window.speechSynthesis && !unlockAudio.spoke){ const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); unlockAudio.spoke = true; } } catch(e){}
 }
 document.addEventListener("pointerdown", unlockAudio, {passive:true});
+document.addEventListener("touchend", unlockAudio, {passive:true});
+document.addEventListener("click", unlockAudio);
 document.addEventListener("keydown", unlockAudio);
 function say(text){
   try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.rate = 1.1; u.lang = "en-US"; speechSynthesis.speak(u); } catch(e){}
