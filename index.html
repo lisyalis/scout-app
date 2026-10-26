@@ -141,14 +141,14 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .cam-wrap{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column}
 .cam-wrap video{flex:1;width:100%;object-fit:cover;min-height:0}
 /* barcode box: same as ISBN Scout (green corners, red sweeping laser, darkened outside) */
-.reticle{position:absolute;left:5%;right:5%;top:30%;height:40%;border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.5);
+.reticle{position:absolute;left:12%;right:12%;top:41%;height:18%;border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.5);
   background:
     linear-gradient(#4ade80,#4ade80) left top/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) left top/4px 26px no-repeat,
     linear-gradient(#4ade80,#4ade80) right top/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) right top/4px 26px no-repeat,
     linear-gradient(#4ade80,#4ade80) left bottom/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) left bottom/4px 26px no-repeat,
     linear-gradient(#4ade80,#4ade80) right bottom/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) right bottom/4px 26px no-repeat}
 .reticle::after{content:"";position:absolute;left:6%;right:6%;top:50%;height:2px;background:#ff3b30;box-shadow:0 0 12px 2px rgba(255,59,48,.7);animation:sweep 1.6s ease-in-out infinite alternate}
-@keyframes sweep{from{top:22%}to{top:78%}}
+@keyframes sweep{from{top:15%}to{top:85%}}
 @media (prefers-reduced-motion:reduce){.reticle::after{animation:none}}
 #cam.text .reticle{background:none;border:3px solid #facc15}
 #cam.text .reticle::after{display:none}
@@ -163,7 +163,7 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .cam-bar{flex-wrap:wrap}
 #camHint{flex-basis:100%;font-size:14px}
 #cam.text .reticle{top:40%;height:20%;left:8%;right:8%;border-radius:14px;box-shadow:none}
-.guide-label{position:absolute;left:5%;right:5%;bottom:calc(100% - 30% + 10px);text-align:center;color:#fff;font-weight:600;font-size:15px;text-shadow:0 1px 4px rgba(0,0,0,.7);pointer-events:none}
+.guide-label{position:absolute;left:5%;right:5%;bottom:calc(100% - 41% + 10px);text-align:center;color:#fff;font-weight:600;font-size:15px;text-shadow:0 1px 4px rgba(0,0,0,.7);pointer-events:none}
 #cam.text .guide-label{left:8%;right:8%;bottom:calc(100% - 40% + 10px);font-size:16px}
 #zoomBtn[hidden]{display:none}
 #modeBtn[data-mode="text"]{background:var(--blue);color:#06202c;border-color:var(--blue)}
@@ -246,7 +246,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-26b";
+const APP_VERSION = "2026-10-26c";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
