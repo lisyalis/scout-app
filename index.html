@@ -228,7 +228,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-25b";
+const APP_VERSION = "2026-10-25c";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -613,6 +613,7 @@ function scanBar(){
     <input type="file" accept="image/*" capture="environment" id="visIn" hidden>
     <button class="round cam" type="button" id="camBtn" aria-label="Scan with camera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
   </form>
+  <div class="note" style="margin-top:6px">iPhone tip: tap the box, then <b>Scan Text</b> (the text-in-a-frame icon on the keyboard, or long-press the box) and point at the ISBN. It looks up by itself.</div>
   <label class="note" style="display:block;margin-top:6px">Or use a photo (barcode or ISBN page): <input type="file" accept="image/*" capture="environment" id="photoIn" style="width:auto;border:0;padding:0;font-size:13px"></label>`;
 }
 function renderScan(err){
@@ -687,9 +688,20 @@ function resultHTML(){
     <button class="btn" id="clearRes">Next item</button>
   </div>`;
 }
+function routeInput(v){
+  v = String(v||"").trim(); if (!v) return;
+  const c = isbnCandidates(v);
+  if (c.exact.length){ visual = null; lookup(c.exact[0]); return; }
+  if (isCode(v)){ visual = null; lookup(v); return; }
+  const digits = v.replace(/[^0-9Xx]/g,"");
+  if (digits.length >= 8 && digits.length/v.replace(/\s/g,"").length > .6){ visual = null; lookup(digits); return; }   // mostly a number
+  titleSearch(v);
+}
 function wireScanBar(){
   const f = $("#scanForm");
-  f.addEventListener("submit", e => { e.preventDefault(); const v=$("#q").value; $("#q").value=""; isCode(v) ? lookup(v) : titleSearch(v); });
+  f.addEventListener("submit", e => { e.preventDefault(); const v=$("#q").value; $("#q").value=""; routeInput(v); });
+  // iPhone "Scan Text" inserts text without pressing search: look it up as soon as a valid ISBN lands in the box
+  $("#q").addEventListener("input", e => { const v = e.target.value; if (v.length >= 10 && !e.isComposing){ const c = isbnCandidates(v); if (c.exact.length){ e.target.value = ""; visual = null; lookup(c.exact[0]); } } });
   $("#visBtn").addEventListener("click", () => openCam("text"));
   $("#visIn").addEventListener("change", visualScan);
   $("#camBtn").addEventListener("click", openCam);
@@ -967,7 +979,7 @@ function visualHTML(){
 }
 function wireVisual(){
   const c = $("#visCancel"); if (c) c.onclick = () => { visual = null; renderScan(); };
-  const f = $("#visForm"); if (f) f.onsubmit = e => { e.preventDefault(); const v = $("#visTerm").value; if (isCode(v)){ visual = null; lookup(v); } else titleSearch(v); };
+  const f = $("#visForm"); if (f) f.onsubmit = e => { e.preventDefault(); routeInput($("#visTerm").value); };
   document.querySelectorAll("[data-isbn]").forEach(b => b.onclick = () => { visual = null; lookup(b.dataset.isbn); });
   document.querySelectorAll("[data-hit]").forEach(b => b.onclick = () => { const p = visual.results[+b.dataset.hit]; visual = null; lookup(p.asin); });
 }
