@@ -246,7 +246,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-26d";
+const APP_VERSION = "2026-10-26e";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1041,6 +1041,18 @@ function zxDecodeBox(video){
   try { return getScoutZx().decodeWithState(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.RGBLuminanceSource(lum, w, h)))).getText(); }
   catch(e){ return null; }   // nothing found in this frame
 }
+let wideTick = 0;
+function zxDecodeWide(video){
+  const vw = video.videoWidth, vh = video.videoHeight, sx = vw*0.05, sy = vh*0.30, sw = vw*0.90, sh = vh*0.40;
+  const scale = Math.min(1, 1280/sw), w = Math.round(sw*scale), h = Math.round(sh*scale);
+  scanCanvas.width = w; scanCanvas.height = h;
+  const g = scanCanvas.getContext("2d", {willReadFrequently:true});
+  g.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+  const d = g.getImageData(0,0,w,h).data, lum = new Uint8ClampedArray(w*h);
+  for (let i = 0, j = 0; j < lum.length; i += 4, j++) lum[j] = (d[i]*77 + d[i+1]*150 + d[i+2]*29) >> 8;
+  try { return getScoutZx().decodeWithState(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.RGBLuminanceSource(lum, w, h)))).getText(); }
+  catch(e){ return null; }
+}
 function makeZx(){
   const r = new ZXing.MultiFormatReader();
   const h = new Map();
@@ -1077,13 +1089,18 @@ $("#modeBtn").onclick = () => { S.camMode = S.camMode === "text" ? "barcode" : "
 // camera zoom (works on newer iPhones; hidden when the phone doesn't allow it)
 let zoomLevel = LS.get("zoom1", 1);
 function zoomCaps(){ try { const tr = stream && stream.getVideoTracks()[0]; const c = tr && tr.getCapabilities ? tr.getCapabilities() : {}; return c.zoom ? {tr, min:c.zoom.min, max:c.zoom.max} : null; } catch(e){ return null; } }
+// The camera's own starting zoom is "1x". Going below it can switch iPhones to the ultra-wide lens,
+// which can't focus up close, so the app never zooms on its own; only the 2x/3x button changes it.
+let baseZoom = null;
 async function applyZoom(){
   const z = zoomCaps(), b = $("#zoomBtn");
   if (!z){ b.hidden = true; return; }
+  if (baseZoom == null){ try { baseZoom = z.tr.getSettings().zoom || 1; } catch(e){ baseZoom = 1; } }
   b.hidden = S.camMode !== "text";
-  const want = S.camMode === "text" ? Math.min(z.max, Math.max(z.min, zoomLevel)) : z.min;
-  b.textContent = (S.camMode === "text" ? zoomLevel : 1) + "x";
-  try { await z.tr.applyConstraints({advanced:[{zoom: want}]}); } catch(e){}
+  const level = S.camMode === "text" ? zoomLevel : 1;
+  b.textContent = level + "x";
+  const want = Math.min(z.max, Math.max(baseZoom, baseZoom * level));
+  try { if (Math.abs((z.tr.getSettings().zoom || baseZoom) - want) > 0.01) await z.tr.applyConstraints({advanced:[{zoom: want}]}); } catch(e){}
 }
 let torchOn = false;
 function setTorchBtn(){ try { const tr = stream && stream.getVideoTracks()[0]; const c = tr && tr.getCapabilities ? tr.getCapabilities() : {}; $("#torchBtn").hidden = !c.torch; } catch(e){ $("#torchBtn").hidden = true; } $("#torchBtn").textContent = torchOn ? "Light off" : "Light"; }
@@ -1186,9 +1203,10 @@ async function openCam(mode){
     if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
     try{
       stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}}});
+      baseZoom = null;
     }catch(e){ stopStream(); $("#cam").hidden = true; toast("Camera blocked. Settings > Safari > Camera > Allow."); return; }
     try { const tr = stream.getVideoTracks()[0]; const caps = tr.getCapabilities ? tr.getCapabilities() : {};
-          if (caps.focusMode && caps.focusMode.includes("continuous")) await tr.applyConstraints({advanced:[{focusMode:"continuous"}]}); } catch(e){}
+          await tr.applyConstraints({advanced:[{focusMode:"continuous"}]}); } catch(e){}
   }
   applyZoom(); setTorchBtn();
   const video = freshVideo();
@@ -1207,7 +1225,7 @@ async function openCam(mode){
       let code = null;
       try{
         if (native){ const r = await native.detect(video); if (r && r.length) code = r[0].rawValue; }
-        else if (window.ZXing) code = zxDecodeBox(video);
+        else if (window.ZXing){ code = zxDecodeBox(video); if (!code && (++wideTick % 4 === 0)) code = zxDecodeWide(video); }
       }catch(e){ scoutZx = null; }
       if (session !== camSession) return;
       if (code){
