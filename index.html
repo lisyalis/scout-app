@@ -89,6 +89,8 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .offcol+.offcol{border-left:1px solid var(--line)}
 .oc{display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 4px;border-top:1px solid var(--line);margin:0 4px}
 .oc:first-child{border-top:0}
+.oc[data-sell]{cursor:pointer}
+.oc[data-sell]:active{background:var(--panel2)}
 .oc .pr{font:600 18px var(--display);font-variant-numeric:tabular-nums}
 .oc.sell{border:2px solid var(--buy);border-radius:9px;color:var(--buy)}
 .cc{font:700 11px var(--display);letter-spacing:.06em;background:var(--panel2);color:var(--muted);border-radius:5px;padding:2px 5px}
@@ -246,7 +248,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-26e";
+const APP_VERSION = "2026-10-26f";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -442,24 +444,33 @@ function offersHTML(){
     <button style="background:var(--blue)" aria-pressed="true">NEW (${counts.new})</button>
     <button style="background:var(--accent)" aria-pressed="true">${o ? `FBA (${counts.fba})` : "BUY BOX"}</button></div>`;
   const sellbar = `<div class="sellbar"><span class="amt num">${money(c.sell)}</span><span class="note">sell price</span>
-    ${sellOffer ? `<span class="src">FBA ${sellOffer.total.toFixed(2)} · ${short(sellOffer.cond)}</span>` : `<span class="src">${esc(c.sellSrc).toUpperCase()}</span>`}
+    ${current.pick != null ? `<span class="src">YOUR PICK</span><button class="mini" id="clearPick">Auto</button>`
+      : sellOffer ? `<span class="src">FBA ${sellOffer.total.toFixed(2)} · ${short(sellOffer.cond)}</span>` : `<span class="src">${esc(c.sellSrc).toUpperCase()}</span>`}
     ${o ? `<span class="note" style="margin-left:auto">${current.offersAt ? Math.max(0,Math.round((Date.now()-current.offersAt)/60000)) + "m old" : ""}</span><button class="mini" id="reOff">Refresh</button>` : '<span class="note" style="margin-left:auto">from Keepa stats</span>'}</div>`;
   let body;
   if (current.offersLoading) body = `<div class="empty" style="padding:16px">Loading live offers…</div>`;
   else if (current.offersErr) body = `<div class="err" style="margin:8px">${esc(current.offersErr)}</div>`;
   else if (!o){
     // free: lowest price per condition from the stats the scan already paid for
-    const f = (v, chip, extra="") => v != null ? `<div class="oc${extra}"><span class="pr">${v.toFixed(2)}</span><span class="cc">${chip}</span></div>` : "";
+    let marked = false;
+    const f = (v, chip, extra="") => { if (v == null) return "";
+      const picked = current.pick != null && !marked && Math.abs(v - current.pick) < .005; if (picked) marked = true;
+      const cls = current.pick != null ? (picked ? " sell" : "") : extra;
+      return `<div class="oc${cls}" role="button" tabindex="0" data-sell="${v.toFixed(2)}"><span class="pr">${v.toFixed(2)}</span><span class="cc">${chip}</span></div>`; };
     const usedCol = f(pr.usedLN,"LN") + f(pr.usedVG,"VG") + f(pr.usedG,"G") + f(pr.usedA,"A") || '<div class="oc note">none</div>';
     const newCol  = f(pr.newLow,"N") + f(pr.newFBA,"N FBA") + f(pr.amazon,"AMZ") || '<div class="oc note">none</div>';
     const bbCol   = f(pr.usedBB,"U BB", S.cond==="used" && c.sell===pr.usedBB ? " sell" : "") + f(pr.newBB,"N BB", S.cond==="new" && c.sell===pr.newBB ? " sell" : "") || '<div class="oc note">none</div>';
     body = `<div class="offcols"><div class="offcol">${usedCol}</div><div class="offcol">${newCol}</div><div class="offcol">${bbCol}</div></div>
       <div class="empty" style="padding:10px 12px;text-align:left;display:flex;gap:10px;align-items:center">
-        <span class="note" style="flex:1">Lowest price per condition. Free.</span>
+        <span class="note" style="flex:1">Tap any price to sell at it.</span>
         <button class="mini" id="loadOff">Full live list (≈6 tokens per 10 offers)</button></div>`;
   }
   else {
-    const cell = (x, isSell) => `<div class="oc${isSell ? " sell" : ""}"><span class="pr">${x.total.toFixed(2)}</span><span class="cc${x.fba || x.amazon ? "" : " fbm"}">${short(x.cond)}</span></div>`;
+    let marked = false;
+    const cell = (x, isSell) => {
+      const picked = current.pick != null && !marked && Math.abs(x.total - current.pick) < .005; if (picked) marked = true;
+      const on = current.pick != null ? picked : isSell;
+      return `<div class="oc${on ? " sell" : ""}" role="button" tabindex="0" data-sell="${x.total.toFixed(2)}"><span class="pr">${x.total.toFixed(2)}</span><span class="cc${x.fba || x.amazon ? "" : " fbm"}">${short(x.cond)}</span></div>`; };
     const col = (list, mark) => `<div class="offcol">${list.length ? list.slice(0,8).map(x => cell(x, mark && x === sellOffer)).join("") : '<div class="oc note">none</div>'}</div>`;
     body = `<div class="offcols">${col(usedL,false)}${col(newL,false)}${col(fbaL,true)}</div>`;
   }
@@ -535,6 +546,8 @@ function calc(p, cost){
   }
   // buyers won't pay more for used than for a new Prime copy
   if (S.cond === "used" && sell != null && newFBA != null && newFBA < sell){ sell = newFBA; sellSrc = "capped at new FBA"; }
+  // an offer you tapped becomes the sell price
+  if (current && current.product === p && current.pick != null){ sell = current.pick; sellSrc = "your pick"; }
   const isBook = p.rootCategory === 283155 || p.productGroup === "Book" || p.type === "BOOK";
   const refPct = (p.referralFeePercentage ?? p.referralFeePercent ?? 15) / 100;
   const fbaFee = p.fbaFees && p.fbaFees.pickAndPackFee > 0 ? p.fbaFees.pickAndPackFee/100 : 3.50;
@@ -747,6 +760,13 @@ function wireScan(){
   $("#chartBtn").onclick = () => openChart(current.product);
   document.querySelectorAll("[data-off]").forEach(b => b.onclick = () => { offTab = b.dataset.off; renderScan(); });
   const lo = $("#loadOff"); if (lo) lo.onclick = () => loadOffers(false);
+  // tap an offer to use it as your sell price; tap it again (or Auto) to go back
+  const pickSell = v => { current.pick = (current.pick != null && Math.abs(current.pick - v) < .005) ? null : v; current.calc = calc(current.product, current.cost); renderScan(); };
+  document.querySelectorAll("[data-sell]").forEach(el => {
+    el.onclick = () => pickSell(parseFloat(el.dataset.sell));
+    el.onkeydown = e => { if (e.key === "Enter" || e.key === " "){ e.preventDefault(); pickSell(parseFloat(el.dataset.sell)); } };
+  });
+  const cp = $("#clearPick"); if (cp) cp.onclick = () => { current.pick = null; current.calc = calc(current.product, current.cost); renderScan(); };
   const ro = $("#reOff"); if (ro) ro.onclick = () => loadOffers(true);
   $("#clearRes").onclick = () => { current=null; renderScan(); setTimeout(()=>$("#q").focus(),0); };
   $("#addInv").onclick = () => {
