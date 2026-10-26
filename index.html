@@ -248,7 +248,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-26g";
+const APP_VERSION = "2026-10-26h";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -284,7 +284,8 @@ const S = {
   buybox:   LS.get("buybox", true),        // costs +2 Keepa tokens
   autoOffers: LS.get("autoOffers", false),
   cont:     LS.get("cont", false),         // continuous scan
-  camMode:  LS.get("camMode", "barcode"),  // barcode | text (live ISBN reading)
+  camMode:  LS.get("camMode", "barcode"),
+  sound:    LS.get("sound", "beep"),       // beep | voice | off  // barcode | text (live ISBN reading)
   ladder:   LS.get("ladder", true),        // triggers fall through to slower tiers
   roi:      LS.get("roi", {minProfit:5, minRoi:50, maxRank:6000000, minPulse:6}), // live offers cost ~12 tokens per scan
   history:  LS.get("history", []),
@@ -301,7 +302,7 @@ if (!LS.get("addedSlow", false)){
   }
   LS.set("addedSlow", true); LS.set("triggers", S.triggers);
 }
-function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","sound","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
 
 /* ============ helpers ============ */
 const $ = s => document.querySelector(s);
@@ -360,6 +361,7 @@ async function lookup(raw){
     S.history = S.history.slice(0,300);
     save();
     if (navigator.vibrate) navigator.vibrate(current.calc.buy ? [60,40,60] : 120);
+    announce(current.calc);
     offTab = null;
     busy = false; renderScan();
     if (S.autoOffers || cachedOffers(current.product.asin)) loadOffers(false);
@@ -1261,25 +1263,47 @@ async function openCam(mode){
 let camSession = 0, lastCode = null, lastAt = 0, audio = null, lastBarcodeTry = 0;
 function beep(kind){
   try{
+    if (!audio) unlockAudio();
     if (!audio) return;
-    const tones = kind === "buy" ? [880, 1320] : kind === "skip" ? [300] : [600];
+    const tones = kind === "buy" ? [880, 1320] : kind === "skip" ? [220] : kind === "error" ? [200, 200, 200] : [600];
     tones.forEach((f, i) => {
       const o = audio.createOscillator(), g = audio.createGain(), t = audio.currentTime + i*0.13;
-      o.frequency.value = f; o.type = "square"; g.gain.setValueAtTime(0.0001, t);
+      o.frequency.value = f; o.type = kind === "skip" || kind === "error" ? "sawtooth" : "square"; g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(0.25, t+0.01); g.gain.exponentialRampToValueAtTime(0.0001, t+0.11);
-      o.connect(g).connect(audio.destination); o.start(t); o.stop(t+0.12);
+      const len = kind === "skip" ? 0.28 : 0.12;
+      if (kind === "skip"){ g.gain.cancelScheduledValues(t); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t+0.01); g.gain.exponentialRampToValueAtTime(0.0001, t+len-0.01); }
+      o.connect(g).connect(audio.destination); o.start(t); o.stop(t+len);
     });
   }catch(e){}
+}
+// BUY/SKIP sounds. iPhone only allows sound after you've touched the screen once, so unlock on the first tap or key.
+function unlockAudio(){
+  try { audio = audio || new (window.AudioContext || window.webkitAudioContext)(); if (audio.state === "suspended") audio.resume(); } catch(e){}
+  try { if (window.speechSynthesis && !unlockAudio.spoke){ const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); unlockAudio.spoke = true; } } catch(e){}
+}
+document.addEventListener("pointerdown", unlockAudio, {passive:true});
+document.addEventListener("keydown", unlockAudio);
+function say(text){
+  try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.rate = 1.1; u.lang = "en-US"; speechSynthesis.speak(u); } catch(e){}
+}
+function announce(c){
+  if (!c || S.sound === "off") return;
+  if (S.sound === "voice"){
+    if (c.profit == null) return say("No price");
+    const dollars = Math.round(c.profit);
+    return say(c.buy ? `Buy, ${dollars} dollar${Math.abs(dollars) === 1 ? "" : "s"}` : "Skip");
+  }
+  beep(c.buy ? "buy" : "skip");
 }
 function showCamRes(cls, html){ const b = $("#camRes"); b.className = "camres " + cls; b.innerHTML = html; b.hidden = false; }
 async function contLookup(code){
   showCamRes("wait", `<span class="w">…</span><span class="t">Looking up ${esc(code)}</span><span class="p"></span><span class="s">Keep scanning when this changes</span>`);
-  beep("tick");
+  if (S.sound === "beep") beep("tick");
   const r = await lookup(code);
   if (r && r.stale) return;
-  if (!r || !r.ok || !current){ beep("skip"); showCamRes("skip", `<span class="w">!</span><span class="t">${esc(code)}</span><span class="p"></span><span class="s">${esc((r && r.error) || "Lookup failed")}</span>`); return; }
+  if (!r || !r.ok || !current){ if (S.sound !== "off") beep("error"); showCamRes("skip", `<span class="w">!</span><span class="t">${esc(code)}</span><span class="p"></span><span class="s">${esc((r && r.error) || "Lookup failed")}</span>`); return; }
   const c = current.calc, p = current.product;
-  beep(c.buy ? "buy" : "skip");
+
   if (navigator.vibrate) navigator.vibrate(c.buy ? [60,40,60] : 120);
   showCamRes(c.buy ? "buy" : "skip", `<span class="w">${c.buy ? "BUY" : "SKIP"}</span><span class="t">${esc(p.title)}</span><span class="p num">${money(c.profit)}</span>
     <span class="s">${esc(c.why)} · rank ${kfmt(c.pr.rank)} · pulse ${c.pr.pulse} · tap for details</span>`);
@@ -1461,6 +1485,9 @@ function renderSettings(){
     <div class="field">Keepa API key<input id="key" type="password" value="${esc(S.key)}" placeholder="Paste your key" autocomplete="off"></div>
     <div class="note" style="margin-top:6px">Stored only on this phone. Each scan uses about 1 token, plus 2 with buy box on.</div>
     <div class="row" style="margin-top:10px"><span class="grow">Auto-load live offers (≈6 tokens per 10 offers)</span><label class="switch"><input type="checkbox" id="ao" ${S.autoOffers?"checked":""}><span></span></label></div>
+    <div class="row" style="margin-top:10px"><span class="grow">Sound for BUY / SKIP</span>
+      <select id="snd" style="width:auto;padding:6px 8px"><option value="beep" ${S.sound==="beep"?"selected":""}>Beeps</option><option value="voice" ${S.sound==="voice"?"selected":""}>Voice</option><option value="off" ${S.sound==="off"?"selected":""}>Off</option></select>
+      <button class="mini" id="sndTest">Test</button></div>
     <div class="row" style="margin-top:8px"><button class="mini" id="tokBtn">Check tokens</button><span class="note grow" id="tokOut"></span></div>
     <div class="row" style="margin-top:10px"><span class="grow">Buy box prices (+2 tokens)</span><label class="switch"><input type="checkbox" id="bb" ${S.buybox?"checked":""}><span></span></label></div>
   </div>
@@ -1515,6 +1542,8 @@ function renderSettings(){
   $("#key").onchange = e => { S.key = e.target.value.trim(); save(); toast("Key saved"); };
   $("#bb").onchange = e => { S.buybox = e.target.checked; save(); };
   $("#ao").onchange = e => { S.autoOffers = e.target.checked; save(); };
+  $("#snd").onchange = e => { S.sound = e.target.value; save(); announce({buy:true, profit:12}); };
+  $("#sndTest").onclick = () => { unlockAudio(); announce({buy:true, profit:12}); setTimeout(() => announce({buy:false, profit:1}), 1500); };
   $("#lad").onchange = e => { S.ladder = e.target.checked; save(); };
   document.querySelectorAll("[data-roi]").forEach(el => el.onchange = () => { S.roi[el.dataset.roi] = num(el); save(); });
   $("#tokBtn").onclick = async () => { $("#tokOut").textContent = "Checking…"; const t = await keepaTokens(); $("#tokOut").textContent = t && t.tokensLeft!=null ? `${t.tokensLeft} left · refills ${t.refillRate}/min` + (t.refillIn ? ` · next in ${Math.ceil(t.refillIn/1000)}s` : "") : (t && t.error ? (t.error.message||"Key rejected") : "Couldn't reach Keepa"); };
