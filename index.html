@@ -140,7 +140,7 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 /* camera overlay */
 .cam-wrap{position:fixed;inset:0;background:#000;z-index:50;display:flex;flex-direction:column}
 .cam-wrap video{flex:1;width:100%;object-fit:cover;min-height:0}
-.reticle{position:absolute;left:10%;right:10%;top:32.5%;height:35%;border:3px solid var(--accent);border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.35)}
+.reticle{position:absolute;left:15%;right:15%;top:40%;height:18%;border:3px solid var(--accent);border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,.35)}
 .camres{position:absolute;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));top:calc(12px + env(safe-area-inset-top,0px));border-radius:14px;padding:12px 14px;display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px;align-items:center;text-align:left;color:#111;background:#9aa3ad;box-shadow:0 6px 24px rgba(0,0,0,.4)}
 .camres.buy{background:var(--buy);color:#05230f}.camres.skip{background:var(--skip);color:#2a0705}.camres.wait{background:var(--panel2);color:var(--fg)}
 .camres .w{font:700 34px/1 var(--display);grid-row:span 2}
@@ -233,7 +233,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-25i";
+const APP_VERSION = "2026-10-26a";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -718,7 +718,7 @@ function wireScanBar(){
     toast("Long-press the box and tap Paste");
   });
   $("#visIn").addEventListener("change", visualScan);
-  $("#camBtn").addEventListener("click", openCam);
+  $("#camBtn").addEventListener("click", () => openCam("barcode"));
   $("#photoIn").addEventListener("change", visualScan);
   const c = $("#cancelLookup"); if (c) c.onclick = () => { if (lookupCtl) lookupCtl.abort(); lookupCtl = null; busy = false; renderScan("Lookup canceled."); };
 }
@@ -1164,8 +1164,10 @@ async function openCam(mode){
     } else if (video.readyState >= 2 && video.videoWidth){
       lastBarcodeTry = Date.now();
       const vw = video.videoWidth, vh = video.videoHeight;
-      // center band: 80% wide, 35% tall (barcodes are wide)
-      const cw = Math.round(vw*0.8), ch = Math.round(vh*0.35), cx = Math.round((vw-cw)/2), cy = Math.round((vh-ch)/2);
+      // scan what's inside the box on screen, plus a small margin
+      const bx = boxInVideo(video), mx = bx.sw*0.12, my = bx.sh*0.35;
+      const cx = Math.max(0, Math.round(bx.sx - mx)), cy = Math.max(0, Math.round(bx.sy - my));
+      const cw = Math.min(vw - cx, Math.round(bx.sw + mx*2)), ch = Math.min(vh - cy, Math.round(bx.sh + my*2));
       const scale = Math.min(1, 1280/cw);
       cv.width = Math.round(cw*scale); cv.height = Math.round(ch*scale);
       g.drawImage(video, cx, cy, cw, ch, 0, 0, cv.width, cv.height);
