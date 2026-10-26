@@ -252,7 +252,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-26j";
+const APP_VERSION = "2026-10-26k";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1304,7 +1304,10 @@ function makeWav(tones, wave){
 const CLIPS = {};
 function clip(kind){
   if (!CLIPS[kind]){
-    const spec = {buy:[[[880,.11],[0,.03],[1320,.14]],"square"], skip:[[[220,.30]],"saw"], error:[[[200,.09],[0,.05],[200,.09],[0,.05],[200,.09]],"saw"], tick:[[[600,.05]],"square"]}[kind];
+    // just two sounds: BUY = one high ding, SKIP = one low buzz (errors use the SKIP sound)
+    if (kind !== "buy") kind = "skip";
+    if (CLIPS[kind]) return CLIPS[kind];
+    const spec = {buy:[[[1320,.22]],"sine"], skip:[[[180,.32]],"saw"]}[kind];
     const a = new Audio(makeWav(spec[0], spec[1])); a.preload = "auto"; a.setAttribute("playsinline", ""); CLIPS[kind] = a;
   }
   return CLIPS[kind];
@@ -1313,7 +1316,7 @@ let clipsUnlocked = false;
 function unlockClips(){
   if (clipsUnlocked) return;
   try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch(e){}   // newer iPhones: ignore the silent switch
-  ["buy","skip","error","tick"].forEach(k => {
+  ["buy","skip"].forEach(k => {
     const a = clip(k); a.muted = true;
     const p = a.play(); if (p && p.then) p.then(() => { a.pause(); a.currentTime = 0; a.muted = false; clipsUnlocked = true; }).catch(() => { a.muted = false; });
   });
@@ -1356,7 +1359,6 @@ function announce(c){
 function showCamRes(cls, html){ const b = $("#camRes"); b.className = "camres " + cls; b.innerHTML = html; b.hidden = false; }
 async function contLookup(code){
   showCamRes("wait", `<span class="w">…</span><span class="t">Looking up ${esc(code)}</span><span class="p"></span><span class="s">Keep scanning when this changes</span>`);
-  if (S.sound === "beep") beep("tick");
   const r = await lookup(code);
   if (r && r.stale) return;
   if (!r || !r.ok || !current){ if (S.sound !== "off") beep("error"); showCamRes("skip", `<span class="w">!</span><span class="t">${esc(code)}</span><span class="p"></span><span class="s">${esc((r && r.error) || "Lookup failed")}</span>`); return; }
