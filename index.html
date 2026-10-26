@@ -248,7 +248,7 @@ function showFatal(msg){
 window.addEventListener("error", e => showFatal((e.message||"unknown") + (e.lineno ? " @ line " + e.lineno : "")));
 window.addEventListener("unhandledrejection", e => showFatal(String(e.reason && (e.reason.message || e.reason))));
 
-const APP_VERSION = "2026-10-26f";
+const APP_VERSION = "2026-10-26g";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1540,6 +1540,31 @@ function renderSettings(){
 // drop expired offer caches so storage doesn't grow
 try { for (let i = localStorage.length-1; i >= 0; i--){ const k = localStorage.key(i); if (k && k.startsWith("scout.offers.")){ const v = JSON.parse(localStorage.getItem(k)); if (!v || Date.now()-v.t > OFFER_TTL) localStorage.removeItem(k); } } } catch(e){}
 setTab("scan");
+// Bluetooth/USB barcode scanners "type" the number fast and press Enter. Catch that anywhere in the app,
+// including with the camera open, so the scanner works in every mode.
+let kbBuf = "", kbLast = 0, kbTimer = null;
+function scannerCode(code){
+  kbBuf = ""; clearTimeout(kbTimer);
+  if (!$("#cam").hidden) handleCode(code, camSession);       // camera open: same as a camera scan (continuous mode keeps going)
+  else { if (tab !== "scan") setTab("scan"); routeInput(code); }
+}
+document.addEventListener("keydown", e => {
+  const t = e.target, typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+  if (typing) return;                                           // normal typing in a box (search box handles its own Enter)
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const now = Date.now();
+  if (now - kbLast > 120) kbBuf = "";                           // scanners type very fast; a pause means a person typing
+  kbLast = now;
+  if (e.key === "Enter" || e.key === "Tab"){
+    if (kbBuf.length >= 8){ e.preventDefault(); scannerCode(kbBuf); }
+    kbBuf = ""; return;
+  }
+  if (e.key && e.key.length === 1 && /[0-9Xx]/.test(e.key)){
+    kbBuf += e.key.toUpperCase();
+    clearTimeout(kbTimer);                                      // scanners set to send no Enter: check after a short pause
+    kbTimer = setTimeout(() => { if (kbBuf.length >= 10) scannerCode(kbBuf); kbBuf = ""; }, 180);
+  }
+});
 // offline support + fast start (only works on the hosted https site)
 if ("serviceWorker" in navigator && location.protocol === "https:"){
   window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
