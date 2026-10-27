@@ -174,7 +174,7 @@ async function api(path, opts = {}){
   if (r.status === 401) throw new Error("Wrong app key. It must match APP_KEY in Cloudflare.");
   if (!r.ok){
     const m = d.error || (d.errors && d.errors[0] && (d.errors[0].message + (d.errors[0].details ? " " + d.errors[0].details : ""))) || ("Error " + r.status);
-    throw new Error(m);
+    const err = new Error(m); err.status = r.status; throw err;
   }
   return d;
 }
@@ -332,6 +332,39 @@ async function listIt(){
     }
   } catch(e){ it.result = {ok: false, msgs: [e.message]}; }
   it.busy = false; render();
+}
+
+// ---------- check a listing on Amazon ----------
+async function checkStatus(entry){
+  const st = {at: Date.now()};
+  try {
+    const d = await api("/status?sku=" + encodeURIComponent(entry.sku));
+    const sum = (d.summaries || [])[0] || {};
+    const flags = sum.status || [];
+    const errs = (d.issues || []).filter(i => i.severity === "ERROR");
+    const warns = (d.issues || []).filter(i => i.severity !== "ERROR");
+    const fa = (d.fulfillmentAvailability || [])[0] || {};
+    st.qty = fa.quantity;
+    st.fnsku = sum.fnSku || null;
+    st.msgs = errs.concat(warns).map(i => i.message);
+    if (errs.length){ st.state = "error"; st.label = "Problem on Amazon"; }
+    else if (flags.includes("BUYABLE")){ st.state = "active"; st.label = "Active · buyers can see it"; }
+    else if (entry.channel === "fba"){ st.state = "inactive"; st.label = "Listed · inactive until Amazon gets your stock"; }
+    else { st.state = "inactive"; st.label = "Listed · inactive"; }
+  } catch(e){
+    if (e.status === 404 && e.message === "not found"){ st.state = "fail"; st.label = "Worker needs the update"; st.msgs = ["Paste the newest Worker code into Cloudflare and Deploy."]; }
+    else if (e.status === 404){ st.state = "missing"; st.label = "Not found on Amazon yet"; st.msgs = ["New listings can take up to 15 minutes to show up. If it's still missing later, check Fix Your Products."]; }
+    else { st.state = "fail"; st.label = "Couldn't check"; st.msgs = [e.message]; }
+  }
+  entry.status = st; save();
+  return st;
+}
+function statusHTML(st){
+  if (!st) return "";
+  const cls = st.state === "active" ? "pos" : st.state === "error" || st.state === "fail" ? "neg" : "";
+  const icon = st.state === "active" ? "✓" : st.state === "error" ? "⚠" : st.state === "missing" ? "…" : st.state === "fail" ? "✗" : "●";
+  return `<div class="m"><b class="${cls}">${icon} ${esc(st.label)}</b>${st.qty != null ? ` · qty ${st.qty}` : ""}${st.fnsku ? ` · FNSKU <span class="num">${esc(st.fnsku)}</span>` : ""} · checked ${new Date(st.at).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}</div>
+    ${st.msgs && st.msgs.length ? `<ul style="margin:4px 0 0;padding-left:18px;font-size:13px">${st.msgs.map(m => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}`;
 }
 
 // ---------- camera (same method as Scout: own decode loop on the box area) ----------
@@ -535,8 +568,10 @@ function renderList(){
         ? `<div class="result ok">✓ Listed. SKU <span class="num">${esc(r.entry.sku)}</span>${r.entry.ticket ? ` · ticket #${String(r.entry.ticket).padStart(5, "0")} · shelf ${esc(r.entry.shelf)}` : ""}
             <div class="note" style="margin-top:4px">Amazon accepted it. It shows in Manage Inventory within a few minutes.${S.channel === "fba" ? " Add it to a shipment in Send to Amazon." : ""}</div>
             ${r.entry.warnings.length ? `<ul>${r.entry.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+            <div id="checkRes" style="color:var(--fg);margin-top:8px">${statusHTML(r.entry.status)}</div>
             <div class="row" style="margin-top:10px">
               <button class="btn pri" id="nextBtn" style="flex:1">Next item</button>
+              <button class="btn" id="checkNow" style="flex:1">Check on Amazon</button>
               ${S.channel === "fba" ? `<a class="btn" style="flex:1;text-decoration:none" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/fba/sendtoamazon">Send to Amazon</a>` : ""}
             </div></div>`
         : `<div class="result bad">Amazon didn't accept it${r.status ? " (" + esc(r.status) + ")" : ""}.<ul>${r.msgs.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`) : ""}`;
@@ -589,6 +624,13 @@ function wireList(){
   if ($("#shelf")) $("#shelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); item.sku = buildSku(); render(); };
   $("#listBtn").onclick = listIt;
   if ($("#nextBtn")) $("#nextBtn").onclick = () => { item = null; render(); $("#code").focus(); };
+  if ($("#checkNow")) $("#checkNow").onclick = async e => {
+    const btn = e.currentTarget, entry = S.listed.find(x => x.sku === item.result.entry.sku) || item.result.entry;
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Checking';
+    await checkStatus(entry); item.result.entry = entry;
+    btn.disabled = false; btn.textContent = "Check on Amazon";
+    $("#checkRes").innerHTML = statusHTML(entry.status);
+  };
 }
 
 function renderListed(){
@@ -605,14 +647,24 @@ function renderListed(){
         <div class="m"><span class="tag ${x.channel === "fba" ? "fba" : "mf"}">${x.channel.toUpperCase()}</span>
           ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)} · ${new Date(x.at).toLocaleDateString()}</div>
         <div class="m num">${esc(x.sku)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")} · shelf ${esc(x.shelf)}` : ""}</div>
+        <div data-st="${esc(x.sku)}">${statusHTML(x.status)}</div>
+        <button class="mini" data-check="${esc(x.sku)}" style="margin-top:8px">Check on Amazon</button>
       </div>`).join("") || `<div class="note" style="margin-top:12px">Nothing listed yet.</div>`}</div>`;
   $("#q").oninput = e => { LS.set("q", e.target.value); const p = e.target.selectionStart; renderListed(); const n = $("#q"); n.focus(); n.setSelectionRange(p, p); };
   $("#csv").onclick = exportCsv;
+  document.querySelectorAll("[data-check]").forEach(b => b.onclick = async () => {
+    const entry = S.listed.find(x => x.sku === b.dataset.check); if (!entry) return;
+    b.disabled = true; b.innerHTML = '<span class="spin"></span> Checking';
+    await checkStatus(entry);
+    b.disabled = false; b.textContent = "Check on Amazon";
+    const box = [...document.querySelectorAll("[data-st]")].find(n => n.dataset.st === entry.sku);
+    if (box) box.innerHTML = statusHTML(entry.status);
+  });
 }
 function exportCsv(){
-  const cols = ["date","sku","asin","code","title","channel","condition","price","cost","ticket","shelf"];
+  const cols = ["date","sku","asin","code","title","channel","condition","price","cost","ticket","shelf","amazon_status"];
   const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const lines = [cols.join(",")].concat(S.listed.map(x => [new Date(x.at).toISOString(), x.sku, x.asin, x.code, x.title, x.channel, x.cond, x.price, x.cost, x.ticket, x.shelf].map(q).join(",")));
+  const lines = [cols.join(",")].concat(S.listed.map(x => [new Date(x.at).toISOString(), x.sku, x.asin, x.code, x.title, x.channel, x.cond, x.price, x.cost, x.ticket, x.shelf, x.status ? x.status.label : ""].map(q).join(",")));
   const blob = new Blob([lines.join("\n")], {type: "text/csv"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "bethany-listed.csv"; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
