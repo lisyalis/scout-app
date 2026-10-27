@@ -61,10 +61,12 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .mini{font-size:13px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel2)}
 .chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1.5px solid var(--line);border-radius:999px;font-size:14px;font-weight:600;color:var(--fg);text-decoration:none;background:var(--panel)}
 .chip.acc{border-color:var(--accent);color:var(--accent)}
-.cam{position:relative;margin-top:10px;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:4/3}
-.cam video{width:100%;height:100%;object-fit:cover;display:block}
-.cam .guide{position:absolute;left:12%;right:12%;top:38%;bottom:38%;border:2px dashed var(--buy);border-radius:10px;pointer-events:none}
-.cam .close{position:absolute;right:8px;top:8px;background:rgba(0,0,0,.6);border-radius:8px;padding:6px 10px;font-weight:700}
+.cam{position:fixed;inset:0;z-index:50;background:#000;display:flex;flex-direction:column}
+.cam video{flex:1;width:100%;min-height:0;object-fit:cover;display:block}
+.cam .reticle{position:absolute;left:8%;right:8%;top:38%;height:22%;border:3px dashed var(--buy);border-radius:12px;pointer-events:none}
+.cam .bar{position:absolute;left:0;right:0;bottom:0;display:flex;gap:10px;justify-content:center;padding:14px 14px calc(14px + env(safe-area-inset-bottom,0px));background:linear-gradient(transparent,rgba(0,0,0,.75))}
+.cam .bar .btn{min-width:110px}
+.cam .hint{position:absolute;top:calc(14px + env(safe-area-inset-top,0px));left:0;right:0;text-align:center;font-weight:700;text-shadow:0 1px 3px #000}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:12px}
 .prod{display:flex;gap:12px;align-items:flex-start}
 .prod img{width:70px;height:90px;object-fit:contain;background:#fff;border-radius:8px;flex:none}
@@ -114,6 +116,12 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
   <button data-tab="listed"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>Listed</button>
   <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
 </nav>
+</div>
+<div class="cam" id="cam" hidden>
+  <video id="video" autoplay muted playsinline></video>
+  <div class="reticle"></div>
+  <div class="hint">Fit the barcode in the green box</div>
+  <div class="bar"><button class="btn" id="torchBtn" hidden>Light</button><button class="btn pri" id="camClose">Close</button></div>
 </div>
 <script>
 // ---------- storage ----------
@@ -174,7 +182,7 @@ async function api(path, opts = {}){
 // ---------- state for the item being listed ----------
 let tab = "list";
 let item = null;   // {code, asin, title, img, matches:[], cost, price, gate, gateMsg, gateLink, offers:{New,Used}, fees, result}
-let feeTimer = null, reader = null;
+let feeTimer = null;
 
 function blankItem(code){
   return {code, asin:null, title:"", img:"", matches:[], cost:"", price:"", note:S.notes[S.cond] || "", qty:1,
@@ -326,23 +334,108 @@ async function listIt(){
   it.busy = false; render();
 }
 
-// ---------- camera ----------
-function openCam(){
-  if (!window.ZXing){ toast("Scanner didn't load. Reload the page."); return; }
-  const box = $("#cam"); if (!box) return;
-  box.hidden = false;
+// ---------- camera (same method as Scout: own decode loop on the box area) ----------
+let stream = null, camTimer = null, camSession = 0, native = null, zxReader = null, wideTick = 0, torchOn = false;
+const scanCanvas = document.createElement("canvas");
+const streamLive = () => stream && stream.getVideoTracks().some(t => t.readyState === "live");
+function getZx(){
+  if (zxReader || typeof ZXing === "undefined") return zxReader;
   const hints = new Map();
-  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_E]);
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.EAN_8]);
   hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-  reader = new ZXing.BrowserMultiFormatReader(hints, 200);
-  reader.decodeFromConstraints({audio: false, video: {facingMode: {ideal: "environment"}, width: {ideal: 1280}, height: {ideal: 720}}}, $("#video"), res => {
-    if (res){ if (navigator.vibrate) navigator.vibrate(60); const t = res.getText(); closeCam(); $("#code").value = t; lookup(t); }
-  }).catch(e => { toast("Camera blocked: " + (e.message || e)); closeCam(); });
+  zxReader = new ZXing.MultiFormatReader(); zxReader.setHints(hints);
+  return zxReader;
+}
+// map the green box on screen to the same area of the camera picture (picture is cropped to fill the screen)
+function boxInVideo(video){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const v = video.getBoundingClientRect(), r = document.querySelector("#cam .reticle").getBoundingClientRect();
+  if (!v.width || !r.width) return {sx:vw*0.08, sy:vh*0.38, sw:vw*0.84, sh:vh*0.22};
+  const k = Math.max(v.width/vw, v.height/vh), ox = (v.width - vw*k)/2, oy = (v.height - vh*k)/2;
+  let sx = (r.left - v.left - ox)/k, sy = (r.top - v.top - oy)/k, sw = r.width/k, sh = r.height/k;
+  sx = Math.max(0, sx); sy = Math.max(0, sy); sw = Math.min(vw - sx, sw); sh = Math.min(vh - sy, sh);
+  return {sx, sy, sw, sh};
+}
+function zxDecode(video, area){
+  const {sx, sy, sw, sh} = area;
+  const scale = Math.min(1, 1280/sw), w = Math.round(sw*scale), h = Math.round(sh*scale);
+  if (!w || !h) return null;
+  scanCanvas.width = w; scanCanvas.height = h;
+  const g = scanCanvas.getContext("2d", {willReadFrequently:true});
+  g.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data, lum = new Uint8ClampedArray(w*h);
+  for (let i = 0, j = 0; j < lum.length; i += 4, j++) lum[j] = (d[i]*77 + d[i+1]*150 + d[i+2]*29) >> 8;
+  try { return getZx().decodeWithState(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.RGBLuminanceSource(lum, w, h)))).getText(); }
+  catch(e){ return null; }
+}
+function freshVideo(){
+  // iPhone Safari can freeze a reused <video>, so swap in a new one each time
+  const old = $("#video"), v = document.createElement("video");
+  v.id = "video"; v.autoplay = true; v.muted = true; v.playsInline = true;
+  v.setAttribute("autoplay", ""); v.setAttribute("muted", ""); v.setAttribute("playsinline", "");
+  old.replaceWith(v);
+  return v;
+}
+async function openCam(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Camera needs https."); return; }
+  if (!window.ZXing && !("BarcodeDetector" in window)){ toast("Scanner didn't load. Reload the page."); return; }
+  if (native === null && "BarcodeDetector" in window){
+    try { const f = await BarcodeDetector.getSupportedFormats(); native = f.includes("ean_13") ? new BarcodeDetector({formats:["ean_13","upc_a","upc_e","ean_8"].filter(x => f.includes(x))}) : false; } catch(e){ native = false; }
+  }
+  $("#cam").hidden = false;
+  if (!streamLive()){
+    if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+    try { stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}}}); }
+    catch(e){ $("#cam").hidden = true; toast("Camera blocked. Settings > Safari > Camera > Allow."); return; }
+    try { await stream.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:"continuous"}]}); } catch(e){}
+  }
+  try { const c = stream.getVideoTracks()[0].getCapabilities(); $("#torchBtn").hidden = !c.torch; } catch(e){ $("#torchBtn").hidden = true; }
+  const video = freshVideo();
+  video.srcObject = stream;
+  try { await video.play(); } catch(e){}
+  const session = ++camSession;
+  const tick = async () => {
+    if (session !== camSession || $("#cam").hidden || !streamLive()) return;
+    if (video.readyState >= 2 && video.videoWidth){
+      let code = null;
+      try {
+        if (native){ const r = await native.detect(video); if (r && r.length) code = r[0].rawValue; }
+        else if (window.ZXing){
+          code = zxDecode(video, boxInVideo(video));
+          if (!code && (++wideTick % 4 === 0)){ const vw = video.videoWidth, vh = video.videoHeight; code = zxDecode(video, {sx:vw*0.05, sy:vh*0.30, sw:vw*0.90, sh:vh*0.40}); }
+        }
+      } catch(e){ zxReader = null; }
+      if (session !== camSession) return;
+      if (code){
+        if (navigator.vibrate) navigator.vibrate(60);
+        closeCam();
+        const c = $("#code"); if (c) c.value = code;
+        lookup(code);
+        return;
+      }
+    } else if (video.paused){ try { await video.play(); } catch(e){} }
+    camTimer = setTimeout(tick, native ? 80 : 30);
+  };
+  tick();
 }
 function closeCam(){
-  if (reader){ try { reader.reset(); } catch(e){} reader = null; }
-  const box = $("#cam"); if (box) box.hidden = true;
+  camSession++;
+  clearTimeout(camTimer); camTimer = null;
+  if (torchOn){ torchOn = false; try { stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:false}]}); } catch(e){} }
+  const v = $("#video"); try { v.pause(); } catch(e){}
+  $("#cam").hidden = true;
 }
+function stopStream(){
+  if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+  const v = $("#video"); if (v) v.srcObject = null;
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden){ closeCam(); stopStream(); } });
+$("#camClose").onclick = closeCam;
+$("#torchBtn").onclick = async () => {
+  torchOn = !torchOn;
+  try { await stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:torchOn}]}); } catch(e){ torchOn = false; }
+  $("#torchBtn").textContent = torchOn ? "Light off" : "Light";
+};
 
 // ---------- render ----------
 let soon = 0;
@@ -462,7 +555,6 @@ function renderList(){
       <button class="btn pri" id="camBtn">Scan</button>
       <button class="btn" id="goBtn">Go</button>
     </div>
-    <div class="cam" id="cam" hidden><video id="video" playsinline muted></video><div class="guide"></div><button class="close" id="camClose">Close</button></div>
     ${body}`;
   wireList();
 }
@@ -472,7 +564,6 @@ function wireList(){
   code.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); lookup(code.value); } };
   $("#goBtn").onclick = () => lookup(code.value);
   $("#camBtn").onclick = openCam;
-  $("#camClose").onclick = closeCam;
   document.querySelectorAll("#chan button").forEach(b => b.onclick = () => {
     S.channel = b.dataset.ch; save();
     if (item && !item.loading && !item.err){ item.sku = buildSku(); item.result = null; queueFees(); }
