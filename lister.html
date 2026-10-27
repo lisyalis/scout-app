@@ -106,6 +106,19 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(80px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:9px 16px;border-radius:999px;font-weight:600;z-index:60;max-width:90%;text-align:center}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
 @keyframes sp{to{transform:rotate(360deg)}}
+#labelSheet{display:none}
+.lblprev{background:#fff;color:#000;border-radius:6px;margin:10px auto 0;box-shadow:0 2px 10px rgba(0,0,0,.5);overflow:hidden}
+.lbl{box-sizing:border-box;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column;justify-content:center;align-items:center;overflow:hidden}
+.lbl svg{display:block;width:100%}
+.lbl .fn{font-weight:700;letter-spacing:.06em;line-height:1}
+.lbl .tt{width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;line-height:1.1}
+.lbl .cd{font-weight:700;line-height:1.1}
+@media print{
+  body *{visibility:hidden!important}
+  #labelSheet,#labelSheet *{visibility:visible!important}
+  #labelSheet{display:block!important;position:absolute;left:0;top:0}
+  #labelSheet .lbl{page-break-after:always;break-after:page}
+}
 </style>
 </head>
 <body>
@@ -154,8 +167,9 @@ const S = {
   shelf: LS.get("shelf", "A1"),
   notes: LS.get("notes", DEF_NOTES),
   listed: LS.get("listed", []),
+  labelSize: LS.get("labelSize", "30334"),
 };
-function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize"]) LS.set(k, S[k]); }
 
 // ---------- helpers ----------
 const $ = s => document.querySelector(s);
@@ -328,6 +342,7 @@ async function listIt(){
       if (S.channel === "mf"){ do { S.ticket++; } while (ticketTaken(S.ticket)); }
       save();
       it.result = {ok: true, entry};
+      if (entry.channel === "fba") setTimeout(() => watchFnsku(entry), 0);
     } else {
       it.result = {ok: false, msgs: (errs.length ? errs : (d.issues || [])).map(i => i.message + (i.attributeNames ? " (" + i.attributeNames.join(", ") + ")" : "")), status: d.status};
     }
@@ -382,6 +397,82 @@ function statusHTML(st){
   const icon = st.state === "active" ? "✓" : st.state === "error" ? "⚠" : st.state === "missing" ? "…" : st.state === "fail" ? "✗" : "●";
   return `<div class="m"><b class="${cls}">${icon} ${esc(st.label)}</b>${st.chan ? ` · ${st.chan}` : ""}${!("price" in st) ? "" : st.price != null ? ` · ${money(st.price)}` : " · no price yet"}${st.qty != null ? ` · qty ${st.qty}` : ""}${st.fnsku ? ` · FNSKU <span class="num">${esc(st.fnsku)}</span>` : ""} · checked ${new Date(st.at).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}</div>
     ${st.msgs && st.msgs.length ? `<ul style="margin:4px 0 0;padding-left:18px;font-size:13px">${st.msgs.map(m => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}`;
+}
+
+// ---------- FNSKU labels (Code 128) ----------
+const LABELS = {
+  "30334": {name: "Dymo 30334 · 2.25\" x 1.25\"", w: 2.25, h: 1.25},
+  "30336": {name: "Dymo 30336 · 2.125\" x 1\"", w: 2.125, h: 1},
+  "30252": {name: "Dymo 30252 · 3.5\" x 1.125\"", w: 3.5, h: 1.125},
+};
+const C128 = ["212222","222122","222221","121223","121322","131222","122213","122312","132212","221213","221312","231212","112232","122132","122231","113222","123122","123221","223211","221132","221231","213212","223112","312131","311222","321122","321221","312212","322112","322211","212123","212321","232121","111323","131123","131321","112313","132113","132311","211313","231113","231311","112133","112331","132131","113123","113321","133121","313121","211331","231131","213113","213311","213131","311123","311321","331121","312113","312311","332111","314111","221411","431111","111224","111422","121124","121421","141122","141221","112214","112412","122114","122411","142112","142211","241211","221114","413111","241112","134111","111242","121142","121241","114212","124112","124211","411212","421112","421211","212141","214121","412121","111143","111341","131141","114113","114311","411113","411311","113141","114131","311141","411131","211412","211214","211232","2331112"];
+function code128Svg(text){
+  const data = [...text].map(ch => ch.charCodeAt(0) - 32);
+  if (data.some(v => v < 0 || v > 94)) throw new Error("Bad characters in " + text);
+  const vals = [104].concat(data);
+  let sum = 104; for (let i = 1; i < vals.length; i++) sum += vals[i] * i;
+  vals.push(sum % 103, 106);
+  const widths = vals.map(v => C128[v]).join("");
+  const quiet = 10; let x = quiet, rects = "";
+  for (let i = 0; i < widths.length; i++){
+    const w = +widths[i];
+    if (i % 2 === 0) rects += `<rect x="${x}" y="0" width="${w}" height="40"/>`;
+    x += w;
+  }
+  return `<svg viewBox="0 0 ${x + quiet} 40" preserveAspectRatio="none" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg">${rects}</svg>`;
+}
+function labelHTML(entry, fnsku){
+  const L = LABELS[S.labelSize] || LABELS["30334"];
+  const pad = 0.06, h = L.h, cond = entry.cond === "new" ? "New" : "Used - " + condOf(entry.cond).name;
+  const title = String(entry.title || "").slice(0, 80);
+  return `<div class="lbl" style="width:${L.w}in;height:${h}in;padding:${pad}in ${pad * 2}in">
+    <div style="width:100%;height:${(h * 0.48).toFixed(3)}in">${code128Svg(fnsku)}</div>
+    <div class="fn" style="font-size:${(h * 8.5).toFixed(1)}pt;margin-top:.02in">${esc(fnsku)}</div>
+    <div class="tt" style="font-size:${(h * 6).toFixed(1)}pt">${esc(title)}</div>
+    <div class="cd" style="font-size:${(h * 6.2).toFixed(1)}pt">${esc(cond)}</div>
+  </div>`;
+}
+function printLabels(entry, fnsku, qty){
+  fnsku = String(fnsku || "").trim().toUpperCase();
+  if (!/^[A-Z0-9]{10}$/.test(fnsku)){ toast("FNSKU should be 10 letters/numbers, like X00ABC1234"); return; }
+  const L = LABELS[S.labelSize] || LABELS["30334"];
+  let sheet = $("#labelSheet");
+  if (!sheet){ sheet = document.createElement("div"); sheet.id = "labelSheet"; document.body.appendChild(sheet); }
+  sheet.innerHTML = Array.from({length: Math.max(1, qty || 1)}, () => labelHTML(entry, fnsku)).join("");
+  let st = $("#labelPage");
+  if (!st){ st = document.createElement("style"); st.id = "labelPage"; document.head.appendChild(st); }
+  st.textContent = `@page{size:${L.w}in ${L.h}in;margin:0}`;
+  setTimeout(() => window.print(), 50);
+}
+function askAndPrint(entry){
+  const known = entry.status && entry.status.fnsku;
+  const fn = known || prompt("FNSKU for this book (starts with X00). Find it in Manage All Inventory.", "");
+  if (!fn) return;
+  const q = parseInt(prompt("How many labels?", "1")) || 1;
+  printLabels(entry, fn, q);
+}
+// after listing on FBA: ask Amazon every 30s until the FNSKU exists (max 15 min)
+let fnPoll = null;
+function watchFnsku(entry){
+  clearTimeout(fnPoll);
+  let tries = 0;
+  const step = async () => {
+    if (!item || !item.result || !item.result.ok || item.result.entry.sku !== entry.sku) return;
+    tries++;
+    await checkStatus(entry);
+    if (!item || !item.result || item.result.entry.sku !== entry.sku) return;
+    const box = $("#checkRes"); if (box) box.innerHTML = statusHTML(entry.status);
+    const pb = $("#printLbl");
+    if (entry.status && entry.status.fnsku){
+      if (pb){ pb.disabled = false; pb.textContent = "Print label · " + entry.status.fnsku; }
+      if (navigator.vibrate) navigator.vibrate([60, 60, 60]);
+      return;
+    }
+    if (pb) pb.innerHTML = '<span class="spin"></span> Waiting for FNSKU…';
+    if (tries < 30) fnPoll = setTimeout(step, 30000);
+    else if (pb){ pb.disabled = false; pb.textContent = "Print label (type FNSKU)"; }
+  };
+  fnPoll = setTimeout(step, 20000);
 }
 
 // ---------- camera (same method as Scout: own decode loop on the box area) ----------
@@ -586,6 +677,7 @@ function renderList(){
             <div class="note" style="margin-top:4px">Amazon accepted it. It shows in Manage Inventory within a few minutes.${S.channel === "fba" ? " Add it to a shipment in Send to Amazon." : ""}</div>
             ${r.entry.warnings.length ? `<ul>${r.entry.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
             <div id="checkRes" style="color:var(--fg);margin-top:8px">${statusHTML(r.entry.status)}</div>
+            ${S.channel === "fba" ? `<button class="btn pri" id="printLbl" style="width:100%;margin-top:10px" ${r.entry.status && r.entry.status.fnsku ? "" : "disabled"}>${r.entry.status && r.entry.status.fnsku ? "Print label · " + esc(r.entry.status.fnsku) : '<span class="spin"></span> Waiting for FNSKU…'}</button>` : ""}
             <div class="row" style="margin-top:10px">
               <button class="btn pri" id="nextBtn" style="flex:1">Next item</button>
               <button class="btn" id="checkNow" style="flex:1">Check on Amazon</button>
@@ -640,13 +732,15 @@ function wireList(){
   if ($("#newSku")) $("#newSku").onclick = () => { item.sku = buildSku(); $("#sku").value = item.sku; };
   if ($("#shelf")) $("#shelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); item.sku = buildSku(); render(); };
   $("#listBtn").onclick = listIt;
-  if ($("#nextBtn")) $("#nextBtn").onclick = () => { item = null; render(); $("#code").focus(); };
+  if ($("#nextBtn")) $("#nextBtn").onclick = () => { clearTimeout(fnPoll); item = null; render(); $("#code").focus(); };
+  if ($("#printLbl")) $("#printLbl").onclick = () => askAndPrint(S.listed.find(x => x.sku === item.result.entry.sku) || item.result.entry);
   if ($("#checkNow")) $("#checkNow").onclick = async e => {
     const btn = e.currentTarget, entry = S.listed.find(x => x.sku === item.result.entry.sku) || item.result.entry;
     btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Checking';
     await checkStatus(entry); item.result.entry = entry;
     btn.disabled = false; btn.textContent = "Check on Amazon";
     $("#checkRes").innerHTML = statusHTML(entry.status);
+    const pb = $("#printLbl"); if (pb && entry.status.fnsku){ pb.disabled = false; pb.textContent = "Print label · " + entry.status.fnsku; }
   };
 }
 
@@ -665,7 +759,8 @@ function renderListed(){
           ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)} · ${new Date(x.at).toLocaleDateString()}</div>
         <div class="m num">${esc(x.sku)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")} · shelf ${esc(x.shelf)}` : ""}</div>
         <div data-st="${esc(x.sku)}">${statusHTML(x.status)}</div>
-        <div class="row" style="margin-top:8px"><button class="mini" data-check="${esc(x.sku)}">Check on Amazon</button>
+        <div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="mini" data-check="${esc(x.sku)}">Check on Amazon</button>
+        ${x.channel === "fba" ? `<button class="mini" data-print="${esc(x.sku)}">Print label</button>` : ""}
         ${x.status && "price" in x.status && x.status.price == null ? `<button class="mini" data-fix="${esc(x.sku)}" style="border-color:var(--accent);color:var(--accent)">Resend price & ${x.channel === "fba" ? "FBA" : "MF"}</button>` : ""}</div>
       </div>`).join("") || `<div class="note" style="margin-top:12px">Nothing listed yet.</div>`}</div>`;
   $("#q").oninput = e => { LS.set("q", e.target.value); const p = e.target.selectionStart; renderListed(); const n = $("#q"); n.focus(); n.setSelectionRange(p, p); };
@@ -677,6 +772,7 @@ function renderListed(){
     b.disabled = false; b.textContent = "Check on Amazon";
     renderListed();
   });
+  document.querySelectorAll("[data-print]").forEach(b => b.onclick = () => { const e = S.listed.find(x => x.sku === b.dataset.print); if (e) askAndPrint(e); });
   document.querySelectorAll("[data-fix]").forEach(b => b.onclick = async () => {
     const entry = S.listed.find(x => x.sku === b.dataset.fix); if (!entry) return;
     b.disabled = true; b.innerHTML = '<span class="spin"></span> Sending';
@@ -713,6 +809,11 @@ function renderSettings(){
     </div>
     <div class="note" style="margin-top:6px">The ticket goes up by one after each MF listing and skips numbers you've already used.</div>
 
+    <h2>FNSKU labels</h2>
+    <label class="field">Label size<select id="sLabel">${Object.entries(LABELS).map(([k, v]) => `<option value="${k}" ${S.labelSize === k ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
+    <div class="lblprev" id="lblPrev" style="width:max-content"></div>
+    <div class="row" style="margin-top:10px"><button class="mini" id="testPrint">Print a test label</button></div>
+
     <h2>Condition notes</h2>
     ${CONDS.map(c => `<label class="field">${c.name}<textarea data-n="${c.id}" maxlength="1000">${esc(S.notes[c.id] || "")}</textarea></label>`).join("")}
     <div class="row" style="margin-top:16px;flex-wrap:wrap">
@@ -727,6 +828,11 @@ function renderSettings(){
   $("#sTicket").onchange = e => { const n = parseInt(e.target.value); if (n > 0){ S.ticket = n; save(); if (ticketTaken(n)) toast("Ticket " + n + " was already used"); } };
   $("#sShelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); };
   document.querySelectorAll("[data-n]").forEach(t => t.onchange = e => { S.notes = {...S.notes, [t.dataset.n]: e.target.value}; save(); });
+  const sample = {title: "Yoga for the Body, Mind and Soul", cond: "very_good"};
+  const prev = () => { $("#lblPrev").innerHTML = labelHTML(sample, "X00TEST123"); };
+  prev();
+  $("#sLabel").onchange = e => { S.labelSize = e.target.value; save(); prev(); };
+  $("#testPrint").onclick = () => printLabels(sample, "X00TEST123", 1);
   $("#test").onclick = async () => {
     S.worker = $("#sWorker").value.trim(); S.key = $("#sKey").value.trim(); save();
     const out = $("#testRes"); out.innerHTML = '<span class="spin"></span> Testing…';
