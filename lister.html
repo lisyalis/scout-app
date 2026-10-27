@@ -209,7 +209,8 @@ async function lookup(raw){
       const items = (d.items || []).map(x => ({
         asin: x.asin,
         title: (x.summaries && x.summaries[0] && x.summaries[0].itemName) || x.asin,
-        img: (x.images && x.images[0] && x.images[0].images && x.images[0].images[0] && x.images[0].images[0].link) || ""
+        img: (x.images && x.images[0] && x.images[0].images && x.images[0].images[0] && x.images[0].images[0].link) || "",
+        productType: (x.productTypes && x.productTypes[0] && x.productTypes[0].productType) || null
       }));
       if (!items.length) throw new Error("No Amazon listing found for " + code + ".");
       item.matches = items;
@@ -315,12 +316,12 @@ async function listIt(){
   it.busy = true; it.result = null; render();
   try {
     const d = await api("/list", {method: "POST", body: JSON.stringify({
-      sku: it.sku, asin: it.asin, condition: S.cond, note: it.note.trim(), price,
+      sku: it.sku, asin: it.asin, productType: it.productType || undefined, condition: S.cond, note: it.note.trim(), price,
       fba: S.channel === "fba", qty: S.channel === "mf" ? (parseInt(it.qty) || 1) : undefined
     })});
     const errs = (d.issues || []).filter(i => i.severity === "ERROR");
     if (d.status === "ACCEPTED" && !errs.length){
-      const entry = {at: Date.now(), sku: it.sku, asin: it.asin, code: it.code, title: it.title, cond: S.cond, channel: S.channel,
+      const entry = {at: Date.now(), sku: it.sku, asin: it.asin, productType: it.productType || null, code: it.code, title: it.title, cond: S.cond, channel: S.channel,
         price, cost: parseFloat(it.cost) || 0, ticket: S.channel === "mf" ? S.ticket : null, shelf: S.channel === "mf" ? S.shelf : null,
         warnings: (d.issues || []).map(i => i.message)};
       S.listed.unshift(entry);
@@ -349,6 +350,7 @@ async function checkStatus(entry){
     const off = (d.offers || [])[0];
     st.price = off && off.price ? Number(off.price.amount ?? off.price.Amount) : null;
     st.fnsku = sum.fnSku || null;
+    if (sum.productType) entry.productType = sum.productType;
     st.msgs = errs.concat(warns).map(i => i.message);
     if (errs.length){ st.state = "error"; st.label = "Problem on Amazon"; }
     else if (st.price == null){ st.state = "inactive"; st.label = "Listed · price not applied yet"; }
@@ -362,6 +364,17 @@ async function checkStatus(entry){
   }
   entry.status = st; save();
   return st;
+}
+async function fixListing(entry){
+  try {
+    const d = await api("/fix", {method: "POST", body: JSON.stringify({sku: entry.sku, productType: entry.productType || undefined,
+      price: entry.price, fba: entry.channel === "fba", qty: entry.channel === "mf" ? 1 : undefined})});
+    const errs = (d.issues || []).filter(i => i.severity === "ERROR");
+    if (d.status === "ACCEPTED" && !errs.length) toast("Sent. Check again in a few minutes.");
+    else toast("Amazon: " + ((errs[0] || (d.issues || [])[0] || {}).message || d.status));
+  } catch(e){
+    toast(e.status === 404 && e.message === "not found" ? "Update the Worker first" : e.message);
+  }
 }
 function statusHTML(st){
   if (!st) return "";
@@ -652,7 +665,8 @@ function renderListed(){
           ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)} · ${new Date(x.at).toLocaleDateString()}</div>
         <div class="m num">${esc(x.sku)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")} · shelf ${esc(x.shelf)}` : ""}</div>
         <div data-st="${esc(x.sku)}">${statusHTML(x.status)}</div>
-        <button class="mini" data-check="${esc(x.sku)}" style="margin-top:8px">Check on Amazon</button>
+        <div class="row" style="margin-top:8px"><button class="mini" data-check="${esc(x.sku)}">Check on Amazon</button>
+        ${x.status && "price" in x.status && x.status.price == null ? `<button class="mini" data-fix="${esc(x.sku)}" style="border-color:var(--accent);color:var(--accent)">Resend price & ${x.channel === "fba" ? "FBA" : "MF"}</button>` : ""}</div>
       </div>`).join("") || `<div class="note" style="margin-top:12px">Nothing listed yet.</div>`}</div>`;
   $("#q").oninput = e => { LS.set("q", e.target.value); const p = e.target.selectionStart; renderListed(); const n = $("#q"); n.focus(); n.setSelectionRange(p, p); };
   $("#csv").onclick = exportCsv;
@@ -661,8 +675,13 @@ function renderListed(){
     b.disabled = true; b.innerHTML = '<span class="spin"></span> Checking';
     await checkStatus(entry);
     b.disabled = false; b.textContent = "Check on Amazon";
-    const box = [...document.querySelectorAll("[data-st]")].find(n => n.dataset.st === entry.sku);
-    if (box) box.innerHTML = statusHTML(entry.status);
+    renderListed();
+  });
+  document.querySelectorAll("[data-fix]").forEach(b => b.onclick = async () => {
+    const entry = S.listed.find(x => x.sku === b.dataset.fix); if (!entry) return;
+    b.disabled = true; b.innerHTML = '<span class="spin"></span> Sending';
+    await fixListing(entry);
+    b.disabled = false; b.textContent = "Resend price & " + (entry.channel === "fba" ? "FBA" : "MF");
   });
 }
 function exportCsv(){
