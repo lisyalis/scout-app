@@ -345,9 +345,13 @@ async function checkStatus(entry){
     const warns = (d.issues || []).filter(i => i.severity !== "ERROR");
     const fa = (d.fulfillmentAvailability || [])[0] || {};
     st.qty = fa.quantity;
+    st.chan = fa.fulfillmentChannelCode ? (/^AMAZON/.test(fa.fulfillmentChannelCode) ? "FBA" : "FBM") : null;
+    const off = (d.offers || [])[0];
+    st.price = off && off.price ? Number(off.price.amount ?? off.price.Amount) : null;
     st.fnsku = sum.fnSku || null;
     st.msgs = errs.concat(warns).map(i => i.message);
     if (errs.length){ st.state = "error"; st.label = "Problem on Amazon"; }
+    else if (st.price == null){ st.state = "inactive"; st.label = "Listed · price not applied yet"; }
     else if (flags.includes("BUYABLE")){ st.state = "active"; st.label = "Active · buyers can see it"; }
     else if (entry.channel === "fba"){ st.state = "inactive"; st.label = "Listed · inactive until Amazon gets your stock"; }
     else { st.state = "inactive"; st.label = "Listed · inactive"; }
@@ -363,7 +367,7 @@ function statusHTML(st){
   if (!st) return "";
   const cls = st.state === "active" ? "pos" : st.state === "error" || st.state === "fail" ? "neg" : "";
   const icon = st.state === "active" ? "✓" : st.state === "error" ? "⚠" : st.state === "missing" ? "…" : st.state === "fail" ? "✗" : "●";
-  return `<div class="m"><b class="${cls}">${icon} ${esc(st.label)}</b>${st.qty != null ? ` · qty ${st.qty}` : ""}${st.fnsku ? ` · FNSKU <span class="num">${esc(st.fnsku)}</span>` : ""} · checked ${new Date(st.at).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}</div>
+  return `<div class="m"><b class="${cls}">${icon} ${esc(st.label)}</b>${st.chan ? ` · ${st.chan}` : ""}${!("price" in st) ? "" : st.price != null ? ` · ${money(st.price)}` : " · no price yet"}${st.qty != null ? ` · qty ${st.qty}` : ""}${st.fnsku ? ` · FNSKU <span class="num">${esc(st.fnsku)}</span>` : ""} · checked ${new Date(st.at).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}</div>
     ${st.msgs && st.msgs.length ? `<ul style="margin:4px 0 0;padding-left:18px;font-size:13px">${st.msgs.map(m => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}`;
 }
 
