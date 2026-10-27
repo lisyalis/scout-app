@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Lister">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#111418">
+<title>Bethany Lister</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+:root{
+  --bg:#111418; --panel:#1b2026; --panel2:#232a31; --line:#2f3740;
+  --fg:#e9edf1; --muted:#8d98a4; --accent:#f5a623; --accent-ink:#1a1204;
+  --buy:#22c55e; --skip:#e5534b; --warn:#eab308; --blue:#38bdf8;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Barlow",system-ui,-apple-system,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.4 var(--body);-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select,textarea{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+textarea{resize:vertical;min-height:64px}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.app{display:flex;flex-direction:column;height:100%;padding-top:env(safe-area-inset-top,0px)}
+main{flex:1;overflow-y:auto;padding:12px max(14px,env(safe-area-inset-left,0px)) 24px max(14px,env(safe-area-inset-right,0px))}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+h1{font:700 19px/1 var(--display);letter-spacing:.03em;margin:0;text-transform:uppercase;white-space:nowrap}
+h2{font:700 20px/1.1 var(--display);letter-spacing:.03em;margin:14px 0 8px;text-transform:uppercase}
+.note{color:var(--muted);font-size:13px}
+nav.tabs{display:grid;grid-template-columns:repeat(3,1fr);background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+nav.tabs button{padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--muted);font-size:12px}
+nav.tabs button[aria-current="true"]{color:var(--accent)}
+nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
+.top{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.top a{margin-left:auto;padding:6px 10px;flex:none}
+.top .seg{flex:none}
+.top .seg button{padding:5px 10px}
+.seg{display:inline-flex;border:1.5px solid var(--accent);border-radius:9px;overflow:hidden}
+.seg button{padding:6px 12px;font:700 15px var(--display);letter-spacing:.06em;color:var(--accent)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.seg.wide{display:grid;grid-template-columns:repeat(5,1fr);width:100%}
+.seg.wide button{padding:8px 2px;font-size:14px}
+.seg.wide button+button{border-left:1px solid var(--accent)}
+.scanrow{display:flex;gap:8px}
+.scanrow input{flex:1}
+.btn{padding:12px;border-radius:10px;font-weight:700;background:var(--panel2);border:1px solid var(--line);text-align:center}
+.btn.pri{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.go{background:var(--buy);color:#05230f;border-color:var(--buy);font:700 22px var(--display);letter-spacing:.06em;width:100%;margin-top:14px;padding:14px}
+.btn:disabled{opacity:.45}
+.mini{font-size:13px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel2)}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1.5px solid var(--line);border-radius:999px;font-size:14px;font-weight:600;color:var(--fg);text-decoration:none;background:var(--panel)}
+.chip.acc{border-color:var(--accent);color:var(--accent)}
+.cam{position:relative;margin-top:10px;border-radius:12px;overflow:hidden;background:#000;aspect-ratio:4/3}
+.cam video{width:100%;height:100%;object-fit:cover;display:block}
+.cam .guide{position:absolute;left:12%;right:12%;top:38%;bottom:38%;border:2px dashed var(--buy);border-radius:10px;pointer-events:none}
+.cam .close{position:absolute;right:8px;top:8px;background:rgba(0,0,0,.6);border-radius:8px;padding:6px 10px;font-weight:700}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:12px}
+.prod{display:flex;gap:12px;align-items:flex-start}
+.prod img{width:70px;height:90px;object-fit:contain;background:#fff;border-radius:8px;flex:none}
+.prod .t{font-weight:600;font-size:17px;line-height:1.25}
+.prod .meta{color:var(--muted);font-size:13px;margin-top:3px}
+.asin{color:var(--accent);font-weight:700;margin-top:4px}
+.matches{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.matches button{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 9px;background:var(--panel2);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gate{margin-top:10px;border-radius:10px;padding:10px 12px;font-weight:700;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.gate.ok{background:rgba(34,197,94,.14);color:var(--buy)}
+.gate.bad{background:rgba(229,83,75,.16);color:var(--skip)}
+.gate.wait{background:var(--panel2);color:var(--muted)}
+.gate .msg{font-weight:500;font-size:13px;color:var(--fg);flex-basis:100%}
+.offers{display:flex;flex-direction:column;gap:1px;background:var(--line);border-radius:10px;overflow:hidden;margin-top:8px}
+.offers button{display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:8px;background:var(--panel2);padding:9px 12px;text-align:left}
+.offers button[aria-pressed="true"]{outline:2px solid var(--accent);outline-offset:-2px}
+.tag{font:700 12px var(--display);letter-spacing:.08em;border-radius:6px;padding:2px 6px;text-align:center}
+.tag.fba{background:rgba(56,189,248,.18);color:var(--blue)}
+.tag.mf{background:rgba(141,152,164,.18);color:var(--muted)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px}
+.field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);margin-top:10px}
+.grid2 .field,.grid3 .field{margin-top:0}
+.money{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:12px;background:var(--panel)}
+.money>div{padding:9px 4px;text-align:center}
+.money>div+div{border-left:1px solid var(--line)}
+.money .v{font:700 22px/1.15 var(--display)}
+.pos{color:var(--buy)} .neg{color:var(--skip)}
+.result{margin-top:12px;border-radius:10px;padding:12px;font-weight:600}
+.result.ok{background:rgba(34,197,94,.14);color:var(--buy)}
+.result.bad{background:rgba(229,83,75,.16);color:var(--skip)}
+.result ul{margin:6px 0 0;padding-left:18px;color:var(--fg);font-weight:500;font-size:13px}
+.row{display:flex;gap:8px;align-items:center}
+.list .item{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px}
+.list .item .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.list .item .m{font-size:13px;color:var(--muted);margin-top:2px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(80px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:9px 16px;border-radius:999px;font-weight:600;z-index:60;max-width:90%;text-align:center}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="app">
+<main id="main"></main>
+<nav class="tabs" id="tabs">
+  <button data-tab="list" aria-current="true"><svg viewBox="0 0 24 24"><path d="M4 7V5h3M17 5h3v2M20 17v2h-3M7 19H4v-2M7 9v6M10 9v6M13 9v6M16 9v6"/></svg>List</button>
+  <button data-tab="listed"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>Listed</button>
+  <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
+</nav>
+</div>
+<script>
+// ---------- storage ----------
+const LS = {
+  get(k, d){ try { const v = localStorage.getItem("bl_" + k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } },
+  set(k, v){ try { localStorage.setItem("bl_" + k, JSON.stringify(v)); } catch(e){} }
+};
+const CONDS = [
+  {id:"new",        short:"NEW", name:"New",        offer:"New"},
+  {id:"like_new",   short:"LN",  name:"Like New",   offer:"Used"},
+  {id:"very_good",  short:"VG",  name:"Very Good",  offer:"Used"},
+  {id:"good",       short:"G",   name:"Good",       offer:"Used"},
+  {id:"acceptable", short:"AC",  name:"Acceptable", offer:"Used"},
+];
+const DEF_NOTES = {
+  new: "Brand new, unread copy.",
+  like_new: "Like new. Clean pages, tight binding, no markings.",
+  very_good: "Very good. Light shelf wear on cover. Pages clean, no markings.",
+  good: "Good. Visible wear on cover and edges. Pages intact and readable.",
+  acceptable: "Acceptable. Heavy wear, may have markings or highlighting. All pages present."
+};
+const S = {
+  worker: LS.get("worker", "https://bethanylister.wickedgoodproducts.workers.dev"),
+  key: LS.get("key", ""),
+  channel: LS.get("channel", "fba"),
+  cond: LS.get("cond", "very_good"),
+  skuFba: LS.get("skuFba", "{DATE}-{COND}-{COST}-{RAND}"),
+  skuMf: LS.get("skuMf", "MF{TICKET}-{COND}-{COST}"),
+  ticket: LS.get("ticket", 1),
+  shelf: LS.get("shelf", "A1"),
+  notes: LS.get("notes", DEF_NOTES),
+  listed: LS.get("listed", []),
+};
+function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed"]) LS.set(k, S[k]); }
+
+// ---------- helpers ----------
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = v => v == null || isNaN(v) ? "—" : (v < 0 ? "−$" : "$") + Math.abs(v).toFixed(2);
+function toast(msg){ const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2200); }
+const condOf = id => CONDS.find(c => c.id === id) || CONDS[2];
+
+async function api(path, opts = {}){
+  if (!S.worker || !S.key) throw new Error("Add your Worker URL and app key in Settings.");
+  let r;
+  try {
+    r = await fetch(S.worker.replace(/\/+$/, "") + path, {...opts, headers: {"x-app-key": S.key, "content-type": "application/json"}});
+  } catch(e){ throw new Error("Can't reach the Worker. Check your connection and the Worker URL."); }
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 401) throw new Error("Wrong app key. It must match APP_KEY in Cloudflare.");
+  if (!r.ok){
+    const m = d.error || (d.errors && d.errors[0] && (d.errors[0].message + (d.errors[0].details ? " " + d.errors[0].details : ""))) || ("Error " + r.status);
+    throw new Error(m);
+  }
+  return d;
+}
+
+// ---------- state for the item being listed ----------
+let tab = "list";
+let item = null;   // {code, asin, title, img, matches:[], cost, price, gate, gateMsg, gateLink, offers:{New,Used}, fees, result}
+let feeTimer = null, reader = null;
+
+function blankItem(code){
+  return {code, asin:null, title:"", img:"", matches:[], cost:"", price:"", note:S.notes[S.cond] || "", qty:1,
+    loading:true, err:null, gate:null, gateMsg:"", gateLink:"", offers:{}, offersErr:null, fees:null, feesErr:null,
+    sku:"", result:null, busy:false};
+}
+
+// ---------- lookup ----------
+async function lookup(raw){
+  const code = String(raw || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+  if (!code) return;
+  closeCam();
+  const keep = item && item.code === code ? item : null;
+  item = blankItem(code);
+  if (keep){ item.cost = keep.cost; item.price = keep.price; }
+  const qs = new URLSearchParams(location.search);
+  if (qs.get("code") === raw){ item.cost = qs.get("cost") || ""; item.price = qs.get("price") || ""; }
+  render();
+  try {
+    if (/^B0[0-9A-Z]{8}$/.test(code)){
+      item.asin = code; item.title = code;
+    } else {
+      const d = await api("/lookup?code=" + encodeURIComponent(code));
+      const items = (d.items || []).map(x => ({
+        asin: x.asin,
+        title: (x.summaries && x.summaries[0] && x.summaries[0].itemName) || x.asin,
+        img: (x.images && x.images[0] && x.images[0].images && x.images[0].images[0] && x.images[0].images[0].link) || ""
+      }));
+      if (!items.length) throw new Error("No Amazon listing found for " + code + ".");
+      item.matches = items;
+      Object.assign(item, items[0]);
+    }
+    item.loading = false;
+    item.sku = buildSku();
+    render();
+    loadGate(); loadOffers();
+    if (item.price) queueFees();
+  } catch(e){ item.loading = false; item.err = e.message; render(); }
+}
+function choose(i){
+  const m = item.matches[i]; if (!m) return;
+  Object.assign(item, m, {gate:null, offers:{}, fees:null, result:null});
+  render(); loadGate(); loadOffers();
+}
+
+async function loadGate(){
+  const it = item; it.gate = "wait"; renderSoon();
+  try {
+    const d = await api(`/restrictions?asin=${it.asin}&condition=${S.cond}`);
+    if (it !== item) return;
+    const r = (d.restrictions || []).flatMap(x => x.reasons || []);
+    if (!r.length){ it.gate = "ok"; it.gateMsg = ""; it.gateLink = ""; }
+    else {
+      it.gate = "bad";
+      it.gateMsg = r.map(x => x.message).filter(Boolean).join(" ");
+      const link = r.flatMap(x => x.links || []).find(l => l.resource);
+      it.gateLink = link ? link.resource : `https://sellercentral.amazon.com/hz/approvalrequest/restrictions/approve?asin=${it.asin}`;
+    }
+  } catch(e){ if (it !== item) return; it.gate = "err"; it.gateMsg = e.message; }
+  render();
+}
+
+async function loadOffers(){
+  const it = item, kind = condOf(S.cond).offer;
+  if (it.offers[kind]){ render(); return; }
+  it.offersErr = null; it.offersLoading = true; renderSoon();
+  try {
+    const d = await api(`/offers?asin=${it.asin}&itemCondition=${kind}`);
+    if (it !== item) return;
+    const list = ((d.payload && d.payload.Offers) || []).map(o => ({
+      price: +(((o.ListingPrice && o.ListingPrice.Amount) || 0) + ((o.Shipping && o.Shipping.Amount) || 0)).toFixed(2),
+      fba: !!o.IsFulfilledByAmazon, sub: String(o.SubCondition || "").replace(/_/g, " "), bb: !!o.IsBuyBoxWinner
+    })).sort((a, b) => a.price - b.price);
+    it.offers[kind] = list;
+    // default price: lowest offer of the same channel, else lowest overall
+    if (!it.price && list.length){
+      const same = list.find(o => o.fba === (S.channel === "fba")) || list[0];
+      it.price = same.price.toFixed(2);
+      queueFees();
+    }
+  } catch(e){ if (it !== item) return; it.offersErr = e.message; }
+  it.offersLoading = false;
+  render();
+}
+
+function queueFees(){
+  clearTimeout(feeTimer);
+  feeTimer = setTimeout(loadFees, 600);
+}
+async function loadFees(){
+  const it = item; if (!it || !it.asin) return;
+  const price = parseFloat(it.price);
+  if (!(price > 0)){ it.fees = null; renderMoney(); return; }
+  it.feesErr = null;
+  try {
+    const d = await api(`/fees?asin=${it.asin}&price=${price}&fba=${S.channel === "fba" ? 1 : 0}`);
+    if (it !== item) return;
+    const est = d.payload && d.payload.FeesEstimateResult;
+    if (est && est.Status === "Success"){ it.fees = est.FeesEstimate.TotalFeesEstimate.Amount; it.feesFor = price; }
+    else { it.fees = null; it.feesErr = (est && est.Error && est.Error.Message) || "No fee estimate"; }
+  } catch(e){ if (it !== item) return; it.fees = null; it.feesErr = e.message; }
+  renderMoney();
+}
+
+// ---------- SKU ----------
+function buildSku(){
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  const cost = (parseFloat(item && item.cost) || 0).toFixed(2);
+  const pattern = S.channel === "mf" ? S.skuMf : S.skuFba;
+  return pattern
+    .replace(/\{DATE\}/g, String(d.getFullYear()).slice(2) + p(d.getMonth() + 1) + p(d.getDate()))
+    .replace(/\{COND\}/g, condOf(S.cond).short)
+    .replace(/\{COST\}/g, cost)
+    .replace(/\{RAND\}/g, rand)
+    .replace(/\{TICKET\}/g, String(S.ticket).padStart(5, "0"))
+    .replace(/\{SHELF\}/g, S.shelf)
+    .replace(/\s+/g, "").slice(0, 40);
+}
+function ticketTaken(n){ return S.listed.some(x => x.channel === "mf" && x.ticket === n); }
+
+// ---------- list it ----------
+async function listIt(){
+  const it = item;
+  const price = parseFloat(it.price);
+  if (!(price > 0)){ toast("Enter a price"); return; }
+  if (!it.sku){ toast("Enter a SKU"); return; }
+  if (S.listed.some(x => x.sku === it.sku)){ toast("That SKU was already used. Change it."); return; }
+  if (S.channel === "mf" && ticketTaken(S.ticket)){ toast("Ticket " + S.ticket + " is already used. Change it in Settings."); return; }
+  it.busy = true; it.result = null; render();
+  try {
+    const d = await api("/list", {method: "POST", body: JSON.stringify({
+      sku: it.sku, asin: it.asin, condition: S.cond, note: it.note.trim(), price,
+      fba: S.channel === "fba", qty: S.channel === "mf" ? (parseInt(it.qty) || 1) : undefined
+    })});
+    const errs = (d.issues || []).filter(i => i.severity === "ERROR");
+    if (d.status === "ACCEPTED" && !errs.length){
+      const entry = {at: Date.now(), sku: it.sku, asin: it.asin, code: it.code, title: it.title, cond: S.cond, channel: S.channel,
+        price, cost: parseFloat(it.cost) || 0, ticket: S.channel === "mf" ? S.ticket : null, shelf: S.channel === "mf" ? S.shelf : null,
+        warnings: (d.issues || []).map(i => i.message)};
+      S.listed.unshift(entry);
+      if (S.channel === "mf"){ do { S.ticket++; } while (ticketTaken(S.ticket)); }
+      save();
+      it.result = {ok: true, entry};
+    } else {
+      it.result = {ok: false, msgs: (errs.length ? errs : (d.issues || [])).map(i => i.message + (i.attributeNames ? " (" + i.attributeNames.join(", ") + ")" : "")), status: d.status};
+    }
+  } catch(e){ it.result = {ok: false, msgs: [e.message]}; }
+  it.busy = false; render();
+}
+
+// ---------- camera ----------
+function openCam(){
+  if (!window.ZXing){ toast("Scanner didn't load. Reload the page."); return; }
+  const box = $("#cam"); if (!box) return;
+  box.hidden = false;
+  const hints = new Map();
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.EAN_8, ZXing.BarcodeFormat.UPC_E]);
+  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  reader = new ZXing.BrowserMultiFormatReader(hints, 200);
+  reader.decodeFromConstraints({audio: false, video: {facingMode: {ideal: "environment"}, width: {ideal: 1280}, height: {ideal: 720}}}, $("#video"), res => {
+    if (res){ if (navigator.vibrate) navigator.vibrate(60); const t = res.getText(); closeCam(); $("#code").value = t; lookup(t); }
+  }).catch(e => { toast("Camera blocked: " + (e.message || e)); closeCam(); });
+}
+function closeCam(){
+  if (reader){ try { reader.reset(); } catch(e){} reader = null; }
+  const box = $("#cam"); if (box) box.hidden = true;
+}
+
+// ---------- render ----------
+let soon = 0;
+function renderSoon(){ cancelAnimationFrame(soon); soon = requestAnimationFrame(render); }
+function render(){
+  // keep the cursor where it was if a background update redraws the screen while typing
+  const a = document.activeElement, id = a && a.id && /INPUT|TEXTAREA/.test(a.tagName) ? a.id : null;
+  const sel = id ? [a.selectionStart, a.selectionEnd] : null;
+  document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-current", String(b.dataset.tab === tab)));
+  if (tab === "list") renderList();
+  else if (tab === "listed") renderListed();
+  else renderSettings();
+  if (id){ const n = document.getElementById(id); if (n){ n.focus(); try { n.setSelectionRange(sel[0], sel[1]); } catch(e){} } }
+}
+
+function moneyHTML(){
+  const price = parseFloat(item.price), cost = parseFloat(item.cost) || 0;
+  const fees = item.fees != null && item.feesFor === price ? item.fees : null;
+  const payout = fees != null ? price - fees : null;
+  const profit = payout != null ? payout - cost : null;
+  const roi = profit != null && cost > 0 ? Math.round(profit / cost * 100) + "%" : "—";
+  return `
+    <div><div class="v num">${fees != null ? money(fees) : (price > 0 && !item.feesErr ? '<span class="spin"></span>' : "—")}</div><span class="label">Fees</span></div>
+    <div><div class="v num">${money(payout)}</div><span class="label">Payout</span></div>
+    <div><div class="v num ${profit == null ? "" : profit >= 0 ? "pos" : "neg"}">${money(profit)}</div><span class="label">Profit</span></div>
+    <div><div class="v num">${roi}</div><span class="label">ROI</span></div>`;
+}
+function renderMoney(){
+  const m = $("#money"); if (m && item) m.innerHTML = moneyHTML();
+  const fe = $("#feesErr"); if (fe) fe.textContent = item && item.feesErr ? "Fees: " + item.feesErr : "";
+}
+
+function gateHTML(){
+  if (!item.gate || item.gate === "wait") return `<div class="gate wait"><span class="spin"></span> Checking restrictions for ${esc(condOf(S.cond).name)}…</div>`;
+  if (item.gate === "ok") return `<div class="gate ok">✓ Not restricted · ${esc(condOf(S.cond).name)}</div>`;
+  if (item.gate === "bad") return `<div class="gate bad">⚠ RESTRICTED · ${esc(condOf(S.cond).name)}
+      <a class="chip acc" target="_blank" rel="noopener" href="${esc(item.gateLink)}">Request approval</a>
+      <span class="msg">${esc(item.gateMsg)}</span></div>`;
+  return `<div class="gate wait">Couldn't check restrictions: ${esc(item.gateMsg)}</div>`;
+}
+function offersHTML(){
+  const kind = condOf(S.cond).offer, list = item.offers[kind];
+  if (item.offersLoading && !list) return `<div class="note" style="margin-top:8px"><span class="spin"></span> Loading ${kind.toLowerCase()} offers…</div>`;
+  if (item.offersErr) return `<div class="note" style="margin-top:8px">Offers: ${esc(item.offersErr)}</div>`;
+  if (!list) return "";
+  if (!list.length) return `<div class="note" style="margin-top:8px">No ${kind.toLowerCase()} offers. You'd be the only seller.</div>`;
+  const fba = list.filter(o => o.fba).slice(0, 4), mf = list.filter(o => !o.fba).slice(0, 4);
+  const row = o => `<button data-price="${o.price.toFixed(2)}" aria-pressed="${parseFloat(item.price) === o.price}">
+      <span class="tag ${o.fba ? "fba" : "mf"}">${o.fba ? "FBA" : "MF"}</span>
+      <span style="font-size:13px;color:var(--muted)">${esc(o.sub)}${o.bb ? " · buy box" : ""}</span>
+      <span class="num" style="font-weight:700">${money(o.price)}</span></button>`;
+  return `<div class="label" style="margin-top:12px">Lowest ${kind.toLowerCase()} offers · tap to use</div>
+    <div class="offers">${fba.map(row).join("")}${mf.map(row).join("")}</div>`;
+}
+
+function renderList(){
+  const m = $("#main");
+  let body = "";
+  if (item){
+    if (item.loading) body = `<div class="card"><span class="spin"></span> Looking up ${esc(item.code)}…</div>`;
+    else if (item.err) body = `<div class="result bad">${esc(item.err)}</div>`;
+    else {
+      const r = item.result;
+      body = `
+      <div class="card">
+        <div class="prod">
+          ${item.img ? `<img src="${esc(item.img)}" alt="">` : ""}
+          <div style="min-width:0">
+            <div class="t">${esc(item.title)}</div>
+            <div class="asin num">${esc(item.asin)}</div>
+            <div class="meta">Scanned ${esc(item.code)}</div>
+          </div>
+        </div>
+        ${item.matches.length > 1 ? `<div class="label" style="margin-top:10px">Other matches</div><div class="matches">${item.matches.map((x, i) => `<button data-m="${i}">${esc(x.title)}</button>`).join("")}</div>` : ""}
+        ${gateHTML()}
+      </div>
+      <div class="label" style="margin-top:14px">Condition</div>
+      <div class="seg wide" id="conds" style="margin-top:6px">${CONDS.map(c => `<button data-c="${c.id}" aria-pressed="${S.cond === c.id}">${c.short}</button>`).join("")}</div>
+      ${offersHTML()}
+      <div class="grid3">
+        <label class="field">Your price<input id="price" class="num" inputmode="decimal" value="${esc(item.price)}" placeholder="0.00"></label>
+        <label class="field">Buy cost<input id="cost" class="num" inputmode="decimal" value="${esc(item.cost)}" placeholder="0.00"></label>
+        ${S.channel === "mf" ? `<label class="field">Qty<input id="qty" class="num" inputmode="numeric" value="${esc(item.qty)}"></label>` : `<div></div>`}
+      </div>
+      <div class="money" id="money">${moneyHTML()}</div>
+      <div class="note" id="feesErr" style="margin-top:4px">${item.feesErr ? "Fees: " + esc(item.feesErr) : ""}</div>
+      <label class="field">Condition note<textarea id="note" maxlength="1000">${esc(item.note)}</textarea></label>
+      <div class="grid2">
+        <label class="field">SKU<input id="sku" class="num" maxlength="40" value="${esc(item.sku)}"></label>
+        ${S.channel === "mf"
+          ? `<div class="field">Ticket · shelf<div class="row"><span class="chip num">#${String(S.ticket).padStart(5, "0")}</span><input id="shelf" value="${esc(S.shelf)}" style="width:70px"></div></div>`
+          : `<div class="field">&nbsp;<button class="mini" id="newSku">New SKU</button></div>`}
+      </div>
+      ${item.gate === "bad" ? `<div class="note" style="margin-top:10px;color:var(--warn)">This item is restricted for you in this condition. Amazon will likely reject the listing until you're approved.</div>` : ""}
+      <button class="btn go" id="listBtn" ${item.busy ? "disabled" : ""}>${item.busy ? '<span class="spin"></span> LISTING…' : `LIST IT · ${S.channel.toUpperCase()}`}</button>
+      ${r ? (r.ok
+        ? `<div class="result ok">✓ Listed. SKU <span class="num">${esc(r.entry.sku)}</span>${r.entry.ticket ? ` · ticket #${String(r.entry.ticket).padStart(5, "0")} · shelf ${esc(r.entry.shelf)}` : ""}
+            <div class="note" style="margin-top:4px">Amazon accepted it. It shows in Manage Inventory within a few minutes.${S.channel === "fba" ? " Add it to a shipment in Send to Amazon." : ""}</div>
+            ${r.entry.warnings.length ? `<ul>${r.entry.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+            <div class="row" style="margin-top:10px">
+              <button class="btn pri" id="nextBtn" style="flex:1">Next item</button>
+              ${S.channel === "fba" ? `<a class="btn" style="flex:1;text-decoration:none" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/fba/sendtoamazon">Send to Amazon</a>` : ""}
+            </div></div>`
+        : `<div class="result bad">Amazon didn't accept it${r.status ? " (" + esc(r.status) + ")" : ""}.<ul>${r.msgs.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`) : ""}`;
+    }
+  } else {
+    body = `<div class="card note">Scan a barcode, type an ISBN/UPC/ASIN, or use a Bluetooth scanner. Coming from Scout? Tap <b>List it</b> on a result.</div>`;
+  }
+  m.innerHTML = `
+    <div class="top">
+      <h1>Bethany Lister</h1>
+      <div class="seg" id="chan"><button data-ch="fba" aria-pressed="${S.channel === "fba"}">FBA</button><button data-ch="mf" aria-pressed="${S.channel === "mf"}">MF</button></div>
+      <a class="chip" href="./">Scout</a>
+    </div>
+    <div class="scanrow">
+      <input id="code" inputmode="text" autocomplete="off" autocapitalize="characters" placeholder="ISBN, UPC or ASIN" value="${esc(item ? item.code : "")}" enterkeyhint="search">
+      <button class="btn pri" id="camBtn">Scan</button>
+      <button class="btn" id="goBtn">Go</button>
+    </div>
+    <div class="cam" id="cam" hidden><video id="video" playsinline muted></video><div class="guide"></div><button class="close" id="camClose">Close</button></div>
+    ${body}`;
+  wireList();
+}
+
+function wireList(){
+  const code = $("#code");
+  code.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); lookup(code.value); } };
+  $("#goBtn").onclick = () => lookup(code.value);
+  $("#camBtn").onclick = openCam;
+  $("#camClose").onclick = closeCam;
+  document.querySelectorAll("#chan button").forEach(b => b.onclick = () => {
+    S.channel = b.dataset.ch; save();
+    if (item && !item.loading && !item.err){ item.sku = buildSku(); item.result = null; queueFees(); }
+    render();
+  });
+  if (!item || item.loading || item.err) return;
+  document.querySelectorAll("[data-m]").forEach(b => b.onclick = () => choose(+b.dataset.m));
+  document.querySelectorAll("#conds button").forEach(b => b.onclick = () => {
+    const was = S.notes[S.cond] || "";
+    S.cond = b.dataset.c; save();
+    if (!item.note.trim() || item.note === was) item.note = S.notes[S.cond] || "";
+    item.sku = buildSku(); item.result = null;
+    render(); loadGate(); loadOffers();
+  });
+  document.querySelectorAll("[data-price]").forEach(b => b.onclick = () => { item.price = b.dataset.price; render(); queueFees(); });
+  $("#price").oninput = e => { item.price = e.target.value; queueFees(); renderMoney(); };
+  $("#cost").oninput = e => { item.cost = e.target.value; renderMoney(); };
+  $("#cost").onchange = () => { if (/\{COST\}/.test(S.channel === "mf" ? S.skuMf : S.skuFba)){ item.sku = buildSku(); $("#sku").value = item.sku; } };
+  if ($("#qty")) $("#qty").oninput = e => item.qty = e.target.value;
+  $("#note").oninput = e => item.note = e.target.value;
+  $("#sku").oninput = e => item.sku = e.target.value.trim();
+  if ($("#newSku")) $("#newSku").onclick = () => { item.sku = buildSku(); $("#sku").value = item.sku; };
+  if ($("#shelf")) $("#shelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); item.sku = buildSku(); render(); };
+  $("#listBtn").onclick = listIt;
+  if ($("#nextBtn")) $("#nextBtn").onclick = () => { item = null; render(); $("#code").focus(); };
+}
+
+function renderListed(){
+  const q = (LS.get("q", "") || "").toLowerCase();
+  const rows = S.listed.filter(x => !q || [x.title, x.sku, x.asin, x.code, x.shelf, x.ticket].join(" ").toLowerCase().includes(q));
+  const total = rows.reduce((a, x) => a + x.price, 0);
+  $("#main").innerHTML = `
+    <h2>Listed (${S.listed.length})</h2>
+    <div class="row"><input id="q" placeholder="Search title, SKU, ticket, shelf" value="${esc(q)}"><button class="mini" id="csv">CSV</button></div>
+    <div class="note" style="margin-top:6px">${rows.length} items · ${money(total)} listed value</div>
+    <div class="list">${rows.map(x => `
+      <div class="item">
+        <div class="t">${esc(x.title)}</div>
+        <div class="m"><span class="tag ${x.channel === "fba" ? "fba" : "mf"}">${x.channel.toUpperCase()}</span>
+          ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)} · ${new Date(x.at).toLocaleDateString()}</div>
+        <div class="m num">${esc(x.sku)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")} · shelf ${esc(x.shelf)}` : ""}</div>
+      </div>`).join("") || `<div class="note" style="margin-top:12px">Nothing listed yet.</div>`}</div>`;
+  $("#q").oninput = e => { LS.set("q", e.target.value); const p = e.target.selectionStart; renderListed(); const n = $("#q"); n.focus(); n.setSelectionRange(p, p); };
+  $("#csv").onclick = exportCsv;
+}
+function exportCsv(){
+  const cols = ["date","sku","asin","code","title","channel","condition","price","cost","ticket","shelf"];
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lines = [cols.join(",")].concat(S.listed.map(x => [new Date(x.at).toISOString(), x.sku, x.asin, x.code, x.title, x.channel, x.cond, x.price, x.cost, x.ticket, x.shelf].map(q).join(",")));
+  const blob = new Blob([lines.join("\n")], {type: "text/csv"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "bethany-listed.csv"; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function renderSettings(){
+  $("#main").innerHTML = `
+    <h2>Connection</h2>
+    <label class="field">Worker URL<input id="sWorker" value="${esc(S.worker)}" autocapitalize="off" autocomplete="off"></label>
+    <label class="field">App key (same as APP_KEY in Cloudflare)<input id="sKey" type="password" value="${esc(S.key)}" autocapitalize="off" autocomplete="off"></label>
+    <div class="row" style="margin-top:10px"><button class="btn pri" id="test" style="flex:1">Test connection</button></div>
+    <div class="note" id="testRes" style="margin-top:6px"></div>
+
+    <h2>SKU</h2>
+    <label class="field">FBA pattern<input id="sFba" class="num" value="${esc(S.skuFba)}"></label>
+    <label class="field">MF pattern<input id="sMf" class="num" value="${esc(S.skuMf)}"></label>
+    <div class="note" style="margin-top:6px">Codes: {DATE} {COND} {COST} {RAND} {TICKET} {SHELF}. Max 40 characters.</div>
+
+    <h2>MF tickets</h2>
+    <div class="grid2">
+      <label class="field">Next ticket #<input id="sTicket" class="num" inputmode="numeric" value="${S.ticket}"></label>
+      <label class="field">Current shelf<input id="sShelf" value="${esc(S.shelf)}"></label>
+    </div>
+    <div class="note" style="margin-top:6px">The ticket goes up by one after each MF listing and skips numbers you've already used.</div>
+
+    <h2>Condition notes</h2>
+    ${CONDS.map(c => `<label class="field">${c.name}<textarea data-n="${c.id}" maxlength="1000">${esc(S.notes[c.id] || "")}</textarea></label>`).join("")}
+    <div class="row" style="margin-top:16px;flex-wrap:wrap">
+      <a class="chip" href="./">Open Scout</a>
+      <a class="chip" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/fba/sendtoamazon">Send to Amazon</a>
+      <a class="chip" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/myinventory/inventory">Manage Inventory</a>
+    </div>`;
+  $("#sWorker").onchange = e => { S.worker = e.target.value.trim(); save(); };
+  $("#sKey").onchange = e => { S.key = e.target.value.trim(); save(); };
+  $("#sFba").onchange = e => { S.skuFba = e.target.value.trim() || "{DATE}-{COND}-{COST}-{RAND}"; save(); };
+  $("#sMf").onchange = e => { S.skuMf = e.target.value.trim() || "MF{TICKET}-{COND}-{COST}"; save(); };
+  $("#sTicket").onchange = e => { const n = parseInt(e.target.value); if (n > 0){ S.ticket = n; save(); if (ticketTaken(n)) toast("Ticket " + n + " was already used"); } };
+  $("#sShelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); };
+  document.querySelectorAll("[data-n]").forEach(t => t.onchange = e => { S.notes = {...S.notes, [t.dataset.n]: e.target.value}; save(); });
+  $("#test").onclick = async () => {
+    S.worker = $("#sWorker").value.trim(); S.key = $("#sKey").value.trim(); save();
+    const out = $("#testRes"); out.innerHTML = '<span class="spin"></span> Testing…';
+    try {
+      const d = await api("/lookup?code=9780307387899");
+      const t = d.items && d.items[0] && d.items[0].summaries && d.items[0].summaries[0] && d.items[0].summaries[0].itemName;
+      out.innerHTML = `<span class="pos">✓ Connected to Amazon.</span> Test book: ${esc(t || "found")}`;
+    } catch(e){ out.innerHTML = `<span class="neg">✗ ${esc(e.message)}</span>`; }
+  };
+}
+
+// ---------- start ----------
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { closeCam(); tab = b.dataset.tab; render(); });
+// Bluetooth scanners type fast and press Enter; keep the box ready on the List tab
+document.addEventListener("keydown", e => {
+  if (tab !== "list") return;
+  const a = document.activeElement;
+  if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return;
+  if (/^[0-9A-Za-z]$/.test(e.key)){ const c = $("#code"); if (c){ c.value = ""; c.focus(); } }
+});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+render();
+const start = new URLSearchParams(location.search).get("code");
+if (!S.key){ tab = "settings"; render(); toast("Enter your app key to connect"); }
+else if (start) lookup(start);
+</script>
+</body>
+</html>

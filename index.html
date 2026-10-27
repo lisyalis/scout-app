@@ -705,6 +705,7 @@ function resultHTML(){
   ${offersHTML()}
   <div class="note" style="margin-top:6px">${c.roi != null ? `ROI ${Math.round(c.roi)}% · ` : ""}Fees ${money(c.fees)} = ${Math.round(c.refPct*100)}% referral${c.closing?" + $1.80 closing":""} + ${money(c.fbaFee)} FBA + ${money(c.lbs*S.inbound)} inbound${S.prep?" + prep":""} · offers: ${pr.countUsed} used / ${pr.countNew} new</div>
   <div class="links">
+    <a class="chip acc" href="lister.html?code=${encodeURIComponent(current.code || p.asin)}&cost=${(Number(current.cost)||0).toFixed(2)}${c.sell ? "&price=" + Number(c.sell).toFixed(2) : ""}">List it</a>
     <button class="chip acc" id="chartBtn">Chart</button>
     <a class="chip" target="_blank" rel="noopener" href="https://www.amazon.com/dp/${p.asin}">Amazon</a>
     <a class="chip" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/product-search/search?q=${p.asin}">Gated?</a>
@@ -1589,6 +1590,7 @@ function renderSettings(){
     <div class="links" style="margin-top:10px">
       <a class="chip" target="_blank" rel="noopener" href="https://lisyalis.github.io/scout-app/">Open app</a>
       <a class="chip" target="_blank" rel="noopener" href="https://github.com/lisyalis/scout-app">GitHub repo</a>
+      <a class="chip acc" href="lister.html">Bethany Lister</a>
     </div>
     <div class="note" style="margin-top:8px">Version ${APP_VERSION}</div></div>`;
   const num = (el, d=0) => { const v=parseFloat(el.value); return isNaN(v)?d:v; };
