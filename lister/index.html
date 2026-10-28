@@ -1007,14 +1007,14 @@ function renderListed(){
         ${editing === x.sku ? `
           <div class="grid2" style="margin-top:8px">
             <label class="field">Price<input id="ePrice" class="num" inputmode="decimal" value="${x.price.toFixed(2)}"></label>
-            <div></div>
+            <label class="field">Buy cost (only saved here)<input id="eCost" class="num" inputmode="decimal" value="${(x.cost || 0).toFixed(2)}"></label>
           </div>
           <label class="field">Condition note<textarea id="eNote" maxlength="1000">${esc(x.note || "")}</textarea></label>
           <div class="row" style="margin-top:8px"><button class="btn pri" id="eSave" style="flex:1">Save to Amazon</button><button class="btn" id="eCancel" style="flex:1">Cancel</button></div>`
         : `<div class="row" style="margin-top:8px;flex-wrap:wrap">
           <button class="mini" data-check="${esc(x.sku)}">Check</button>
           <button class="mini" data-print="${esc(x.sku)}">${x.channel === "fba" ? "Print label" : "Print ticket"}</button>
-          <button class="mini" data-edit="${esc(x.sku)}">Edit</button>
+          <button class="mini" data-edit="${esc(x.sku)}" ${!x.cost ? 'style="border-color:var(--accent);color:var(--accent)"' : ""}>${!x.cost ? "Add cost" : "Edit"}</button>
           <a class="mini" style="text-decoration:none;color:var(--fg)" target="_blank" rel="noopener" href="${scLink(x)}">Seller Central</a>
           <button class="mini" data-del="${esc(x.sku)}" style="color:var(--skip)">Delete</button>
           ${x.status && "price" in x.status && x.status.price == null ? `<button class="mini" data-fix="${esc(x.sku)}" style="border-color:var(--accent);color:var(--accent)">Resend price & ${x.channel === "fba" ? "FBA" : "MF"}</button>` : ""}</div>`}
@@ -1035,11 +1035,14 @@ function renderListed(){
   if ($("#eSave")) $("#eSave").onclick = async e => {
     const entry = find(editing); if (!entry) return;
     const price = parseFloat($("#ePrice").value), note = $("#eNote").value.trim();
+    const cost = parseFloat($("#eCost").value);
     if (!(price > 0)){ toast("Enter a price"); return; }
+    // cost never goes to Amazon: save it right away
+    if (!isNaN(cost) && cost >= 0 && cost !== (entry.cost || 0)){ entry.cost = cost; entry.editedAt = Date.now(); save(); syncSoon(); }
     const body = {sku: entry.sku, productType: entry.productType || undefined};
     if (price !== entry.price) body.price = price;
     if (note !== (entry.note || "")) body.note = note;
-    if (body.price == null && body.note == null){ editing = null; renderListed(); return; }
+    if (body.price == null && body.note == null){ editing = null; toast("Saved"); renderListed(); return; }
     e.currentTarget.disabled = true; e.currentTarget.innerHTML = '<span class="spin"></span> Saving';
     try {
       const d = await api("/edit", {method: "POST", body: JSON.stringify(body)});
