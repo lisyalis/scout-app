@@ -39,7 +39,7 @@ main{flex:1;overflow-y:auto;padding:12px max(14px,env(safe-area-inset-left,0px))
 h1{font:700 18px/1 var(--display);letter-spacing:.03em;margin:0;text-transform:uppercase;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
 h2{font:700 20px/1.1 var(--display);letter-spacing:.03em;margin:14px 0 8px;text-transform:uppercase}
 .note{color:var(--muted);font-size:13px}
-nav.tabs{display:grid;grid-template-columns:repeat(3,1fr);background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+nav.tabs{display:grid;grid-template-columns:repeat(5,1fr);background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
 nav.tabs button{padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--muted);font-size:12px}
 nav.tabs button[aria-current="true"]{color:var(--accent)}
 nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
@@ -128,6 +128,8 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 <nav class="tabs" id="tabs">
   <button data-tab="list" aria-current="true"><svg viewBox="0 0 24 24"><path d="M4 7V5h3M17 5h3v2M20 17v2h-3M7 19H4v-2M7 9v6M10 9v6M13 9v6M16 9v6"/></svg>List</button>
   <button data-tab="listed"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>Listed</button>
+  <button data-tab="ship"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/></svg>Ship</button>
+  <button data-tab="sales"><svg viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 5-6"/></svg>Sales</button>
   <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
 </nav>
 </div>
@@ -171,8 +173,14 @@ const S = {
   labelSize: LS.get("labelSize", "30334"),
   batchMode: LS.get("batchMode", false),
   batch: LS.get("batch", []),
+  shipFrom: LS.get("shipFrom", {name:"", address1:"", address2:"", city:"", state:"", zip:"", phone:""}),
+  box: LS.get("box", {l:12, w:10, h:8, lb:5}),
+  boxPage: LS.get("boxPage", "PackageLabel_Letter_2"),
+  ship: LS.get("ship", null),
+  orders: LS.get("orders", {}),
+  salesDays: LS.get("salesDays", 30),
 };
-function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays"]) LS.set(k, S[k]); }
 const live = () => S.listed.filter(x => !x.deleted);
 
 // ---------- helpers ----------
@@ -735,6 +743,8 @@ function render(){
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-current", String(b.dataset.tab === tab)));
   if (tab === "list") renderList();
   else if (tab === "listed") renderListed();
+  else if (tab === "ship") renderShip();
+  else if (tab === "sales") renderSales();
   else renderSettings();
   if (id){ const n = document.getElementById(id); if (n){ n.focus(); try { n.setSelectionRange(sel[0], sel[1]); } catch(e){} } }
 }
@@ -918,7 +928,7 @@ function renderListed(){
       <div class="item">
         <div class="t">${esc(x.title)}</div>
         <div class="m"><span class="tag ${x.channel === "fba" ? "fba" : "mf"}">${x.channel.toUpperCase()}</span>
-          ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)} · ${new Date(x.at).toLocaleDateString()}</div>
+          ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)} · ${new Date(x.at).toLocaleDateString()}${x.soldAt ? ' · <b class="pos">SOLD</b>' : x.shippedAt ? ' · <b style="color:var(--blue)">SHIPPED</b>' : ""}</div>
         <div class="m num">${esc(x.sku)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")} · shelf ${esc(x.shelf)}` : ""}</div>
         <div data-st="${esc(x.sku)}">${statusHTML(x.status)}</div>
         ${editing === x.sku ? `
@@ -1023,6 +1033,21 @@ function renderSettings(){
     </div>
     <div class="note" style="margin-top:6px">The ticket goes up by one after each MF listing and skips numbers you've already used.</div>
 
+    <h2>Ship from (FBA shipments)</h2>
+    <label class="field">Name<input id="fName" value="${esc(S.shipFrom.name)}" autocomplete="name"></label>
+    <label class="field">Street address<input id="fA1" value="${esc(S.shipFrom.address1)}" autocomplete="address-line1"></label>
+    <label class="field">Apt / suite (optional)<input id="fA2" value="${esc(S.shipFrom.address2)}" autocomplete="address-line2"></label>
+    <div class="grid3">
+      <label class="field">City<input id="fCity" value="${esc(S.shipFrom.city)}" autocomplete="address-level2"></label>
+      <label class="field">State<input id="fState" value="${esc(S.shipFrom.state)}" maxlength="2" autocapitalize="characters" placeholder="PA"></label>
+      <label class="field">ZIP<input id="fZip" value="${esc(S.shipFrom.zip)}" inputmode="numeric" autocomplete="postal-code"></label>
+    </div>
+    <label class="field">Phone<input id="fPhone" value="${esc(S.shipFrom.phone)}" inputmode="tel" autocomplete="tel"></label>
+    <label class="field">Box label paper<select id="sBoxPage">
+      <option value="PackageLabel_Letter_2" ${S.boxPage === "PackageLabel_Letter_2" ? "selected" : ""}>Regular printer · 2 per letter page</option>
+      <option value="PackageLabel_Thermal" ${S.boxPage === "PackageLabel_Thermal" ? "selected" : ""}>4" x 6" thermal (Dymo 4XL, Rollo)</option>
+    </select></label>
+
     <h2>Labels & MF tickets</h2>
     <label class="field">Label size<select id="sLabel">${Object.entries(LABELS).map(([k, v]) => `<option value="${k}" ${S.labelSize === k ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
     <div class="lblprev" id="lblPrev" style="width:max-content"></div>
@@ -1041,6 +1066,9 @@ function renderSettings(){
   $("#sFba").onchange = e => { S.skuFba = e.target.value.trim() || "{DATE}-{COND}-{COST}-{RAND}"; save(); };
   $("#sMf").onchange = e => { S.skuMf = e.target.value.trim() || "MF{TICKET}-{COND}-{COST}"; save(); };
   $("#sTicket").onchange = e => { const n = parseInt(e.target.value); if (n > 0){ S.ticket = n; save(); syncSoon(); if (ticketTaken(n)) toast("Ticket " + n + " was already used"); } };
+  const addr = [["#fName","name"],["#fA1","address1"],["#fA2","address2"],["#fCity","city"],["#fState","state"],["#fZip","zip"],["#fPhone","phone"]];
+  addr.forEach(([id, k]) => $(id).onchange = e => { S.shipFrom = {...S.shipFrom, [k]: e.target.value.trim()}; save(); });
+  $("#sBoxPage").onchange = e => { S.boxPage = e.target.value; save(); };
   $("#sShelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); };
   document.querySelectorAll("[data-n]").forEach(t => t.onchange = e => { S.notes = {...S.notes, [t.dataset.n]: e.target.value}; save(); });
   const sample = {title: "Yoga for the Body, Mind and Soul", cond: "very_good"};
@@ -1061,8 +1089,327 @@ function renderSettings(){
   };
 }
 
+// ---------- Amazon relay (shipments, orders, finances) ----------
+const MKT = "ATVPDKIKX0DER";
+const IB = "/inbound/fba/2024-03-20";
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function spCall(method, path, body){ return api("/sp", {method: "POST", body: JSON.stringify({method, path, body})}); }
+// Amazon runs most shipment steps in the background: wait for the operation to finish
+async function waitOp(r){
+  const id = r && r.operationId; if (!id) return r;
+  for (let i = 0; i < 80; i++){
+    await sleep(i < 4 ? 1500 : 3000);
+    const st = await spCall("GET", `${IB}/operations/${id}`);
+    if (st.operationStatus === "SUCCESS") return st;
+    if (st.operationStatus === "FAILED") throw new Error((st.operationProblems || []).map(p => p.message).join(" ") || "Amazon couldn't finish this step.");
+  }
+  throw new Error("Amazon is taking a long time. Tap Continue to keep going.");
+}
+
+// ---------- Ship: FBA shipments ----------
+const SHIP_STEPS = [
+  ["plan", "Create the shipment plan"],
+  ["packing", "Choose how Amazon wants it packed"],
+  ["boxes", "Send box size, weight and contents"],
+  ["placement", "Get the warehouse and fees"],
+  ["transport", "Get the UPS shipping quote"],
+  ["confirm", "Confirm (you approve the charges)"],
+  ["labels", "Get box labels"],
+];
+let shipBusy = false;
+const shipables = () => live().filter(x => x.channel === "fba" && !x.shippedAt);
+function shipLog(msg){ S.ship.log = (S.ship.log || []).concat([{at: Date.now(), msg}]).slice(-30); save(); }
+async function startShipment(skus){
+  const f = S.shipFrom;
+  if (!f.name || !f.address1 || !f.city || !f.state || !f.zip || !f.phone){ toast("Add your ship-from address in Settings first"); tab = "settings"; render(); return; }
+  S.ship = {at: Date.now(), skus, step: "plan", done: {}, box: {...S.box}, log: []};
+  save(); runShipment();
+}
+async function runShipment(){
+  if (shipBusy || !S.ship) return;
+  shipBusy = true; S.ship.error = null; renderShipSoon();
+  const sh = S.ship;
+  try {
+    if (!sh.done.plan){
+      const f = S.shipFrom;
+      const r = await spCall("POST", `${IB}/inboundPlans`, {
+        name: "Bethany " + new Date().toLocaleDateString(),
+        destinationMarketplaces: [MKT],
+        sourceAddress: {name: f.name, addressLine1: f.address1, ...(f.address2 ? {addressLine2: f.address2} : {}), city: f.city,
+          stateOrProvinceCode: f.state.toUpperCase(), postalCode: f.zip, countryCode: "US", phoneNumber: f.phone},
+        items: sh.skus.map(msku => ({msku, quantity: 1, prepOwner: "NONE", labelOwner: "SELLER"})),
+      });
+      sh.planId = r.inboundPlanId; save();
+      await waitOp(r);
+      sh.done.plan = true; sh.step = "packing"; shipLog("Plan " + sh.planId); save(); renderShipSoon();
+    }
+    if (!sh.done.packing){
+      await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/packingOptions`));
+      const lp = await spCall("GET", `${IB}/inboundPlans/${sh.planId}/packingOptions`);
+      const opt = (lp.packingOptions || []).find(o => o.status === "OFFERED") || (lp.packingOptions || [])[0];
+      if (!opt) throw new Error("Amazon didn't offer a packing option.");
+      sh.packingGroups = opt.packingGroups || [];
+      await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/packingOptions/${opt.packingOptionId}/confirmation`));
+      sh.done.packing = true; sh.step = "boxes"; save(); renderShipSoon();
+    }
+    if (!sh.done.boxes){
+      const groups = [];
+      for (const g of sh.packingGroups){
+        const gi = await spCall("GET", `${IB}/inboundPlans/${sh.planId}/packingGroups/${g}/items`);
+        groups.push({id: g, items: (gi.items || []).map(i => ({msku: i.msku, quantity: i.quantity, prepOwner: i.prepInstructions && i.prepInstructions.some(p => p.prepOwner === "SELLER") ? "SELLER" : "NONE", labelOwner: i.labelOwner || "SELLER"}))});
+      }
+      const total = groups.reduce((a, g) => a + g.items.reduce((b, i) => b + i.quantity, 0), 0) || 1;
+      const b = sh.box;
+      await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/packingInformation`, {
+        packageGroupings: groups.map(g => ({packingGroupId: g.id, boxes: [{
+          contentInformationSource: "BOX_CONTENT_PROVIDED",
+          dimensions: {length: +b.l, width: +b.w, height: +b.h, unitOfMeasurement: "IN"},
+          weight: {unit: "LB", value: Math.max(0.5, +(b.lb * g.items.reduce((a, i) => a + i.quantity, 0) / total).toFixed(2))},
+          quantity: 1, items: g.items}]}))
+      }));
+      sh.boxes = groups.length;
+      sh.boxList = groups.map(g => g.items.map(i => i.msku));
+      sh.done.boxes = true; sh.step = "placement"; save(); renderShipSoon();
+    }
+    if (!sh.done.placement){
+      await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/placementOptions`));
+      const lp = await spCall("GET", `${IB}/inboundPlans/${sh.planId}/placementOptions`);
+      const fee = o => (o.fees || []).reduce((a, f) => a + Number((f.value && f.value.amount) || 0), 0);
+      const opts = (lp.placementOptions || []).filter(o => o.status !== "EXPIRED").sort((a, c) => fee(a) - fee(c));
+      if (!opts.length) throw new Error("Amazon didn't offer a warehouse option.");
+      sh.placementOptionId = opts[0].placementOptionId; sh.shipmentIds = opts[0].shipmentIds || []; sh.placementFee = fee(opts[0]);
+      sh.done.placement = true; sh.step = "transport"; save(); renderShipSoon();
+    }
+    if (!sh.done.transport){
+      await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/transportationOptions`, {
+        placementOptionId: sh.placementOptionId,
+        shipmentTransportationConfigurations: sh.shipmentIds.map(shipmentId => ({shipmentId, readyToShipWindow: {start: new Date().toISOString()}}))
+      }));
+      const lt = await spCall("GET", `${IB}/inboundPlans/${sh.planId}/transportationOptions?placementOptionId=${sh.placementOptionId}&pageSize=20`);
+      const all = lt.transportationOptions || [];
+      const cost = o => Number((o.quote && o.quote.cost && o.quote.cost.amount) || 0);
+      sh.selections = []; sh.carrierCost = 0; sh.carrier = "";
+      for (const id of sh.shipmentIds){
+        const mine = all.filter(o => o.shipmentId === id && o.shippingMode === "GROUND_SMALL_PARCEL");
+        const pick = mine.filter(o => o.shippingSolution === "AMAZON_PARTNERED_CARRIER").sort((a, c) => cost(a) - cost(c))[0] || mine[0];
+        if (!pick) throw new Error("Amazon didn't offer small-parcel shipping for this box.");
+        sh.selections.push({shipmentId: id, transportationOptionId: pick.transportationOptionId});
+        sh.carrierCost += cost(pick);
+        sh.carrier = pick.shippingSolution === "AMAZON_PARTNERED_CARRIER" ? ((pick.carrier && pick.carrier.name) || "UPS") + " (Amazon rate)" : "Your own carrier";
+      }
+      sh.done.transport = true; sh.step = "confirm"; save(); renderShipSoon();
+    }
+    if (!sh.done.confirm){
+      if (!sh.approved){ shipBusy = false; renderShipSoon(); return; }   // wait for the button
+      await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/placementOptions/${sh.placementOptionId}/confirmation`));
+      await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/transportationOptions/confirmation`, {transportationSelections: sh.selections}));
+      sh.confirmIds = [];
+      for (const id of sh.shipmentIds){
+        const g = await spCall("GET", `${IB}/inboundPlans/${sh.planId}/shipments/${id}`);
+        if (g.shipmentConfirmationId) sh.confirmIds.push(g.shipmentConfirmationId);
+      }
+      for (const sku of sh.skus){ const e = S.listed.find(x => x.sku === sku); if (e){ e.shippedAt = Date.now(); e.shipment = sh.confirmIds.join(", "); e.editedAt = Date.now(); } }
+      syncSoon();
+      sh.done.confirm = true; sh.step = "labels"; save(); renderShipSoon();
+    }
+    if (!sh.done.labels){
+      sh.labelUrls = [];
+      for (let k = 0; k < sh.confirmIds.length; k++){
+        const cid = sh.confirmIds[k];
+        let n = sh.shipmentIds.length === 1 ? (sh.boxes || 1) : 1;
+        try { const bx = await spCall("GET", `${IB}/inboundPlans/${sh.planId}/shipments/${sh.shipmentIds[k]}/boxes`); if ((bx.boxes || []).length) n = bx.boxes.length; } catch(e){}
+        const r = await spCall("GET", `/fba/inbound/v0/shipments/${cid}/labels?PageType=${S.boxPage}&LabelType=UNIQUE&NumberOfPackages=${n}`);
+        const url = r.payload && r.payload.DownloadURL;
+        if (url) sh.labelUrls.push({cid, url});
+      }
+      if (!sh.labelUrls.length) throw new Error("Amazon hasn't made the box labels yet. Tap Continue in a minute.");
+      sh.done.labels = true; sh.step = "done"; save();
+    }
+  } catch(e){
+    sh.error = e.status === 404 && e.message === "not found" ? "Update the Worker first." : e.message;
+    shipLog("Error: " + sh.error); save();
+  }
+  shipBusy = false; renderShipSoon();
+}
+async function cancelShipment(){
+  const sh = S.ship; if (!sh) return;
+  if (sh.done.confirm){ toast("This shipment is confirmed. Cancel it in Seller Central if needed."); return; }
+  if (!confirm("Cancel this shipment plan?")) return;
+  if (sh.planId){ try { await spCall("PUT", `${IB}/inboundPlans/${sh.planId}/cancellation`); } catch(e){} }
+  S.ship = null; save(); render();
+}
+let shipSoon = 0;
+function renderShipSoon(){ if (tab !== "ship") return; cancelAnimationFrame(shipSoon); shipSoon = requestAnimationFrame(renderShip); }
+const shipPicked = new Set();
+function renderShip(){
+  const m = $("#main"), sh = S.ship;
+  if (!sh){
+    const rows = shipables();
+    if (!shipPicked.size) rows.forEach(x => shipPicked.add(x.sku));
+    for (const k of [...shipPicked]) if (!rows.some(x => x.sku === k)) shipPicked.delete(k);
+    m.innerHTML = `
+      <h2>Send to Amazon</h2>
+      <div class="note">FBA books you've listed and haven't shipped. Pick the ones going in this box.</div>
+      <div class="list">${rows.map(x => `
+        <label class="item row" style="gap:10px">
+          <input type="checkbox" data-pick="${esc(x.sku)}" ${shipPicked.has(x.sku) ? "checked" : ""} style="width:22px;height:22px;flex:none">
+          <div style="min-width:0;flex:1"><div class="t">${esc(x.title)}</div>
+            <div class="m">${condOf(x.cond).short} · ${money(x.price)} · <span class="num">${esc(x.sku)}</span>${x.status && x.status.fnsku ? " · " + esc(x.status.fnsku) : ' · <span style="color:var(--warn)">no FNSKU yet</span>'}</div></div>
+        </label>`).join("") || `<div class="note" style="margin-top:12px">No FBA books waiting to ship.</div>`}</div>
+      ${rows.length ? `
+      <h2>Box</h2>
+      <div class="grid3">
+        <label class="field">Length (in)<input id="bL" class="num" inputmode="decimal" value="${S.box.l}"></label>
+        <label class="field">Width (in)<input id="bW" class="num" inputmode="decimal" value="${S.box.w}"></label>
+        <label class="field">Height (in)<input id="bH" class="num" inputmode="decimal" value="${S.box.h}"></label>
+      </div>
+      <div class="grid2"><label class="field">Weight (lb, packed)<input id="bLb" class="num" inputmode="decimal" value="${S.box.lb}"></label><div></div></div>
+      <div class="note" style="margin-top:6px">Ships from: ${S.shipFrom.address1 ? esc(`${S.shipFrom.name}, ${S.shipFrom.address1}, ${S.shipFrom.city} ${S.shipFrom.state}`) : '<span class="neg">add your address in Settings</span>'}</div>
+      <button class="btn go" id="shipGo" ${shipPicked.size ? "" : "disabled"}>CREATE SHIPMENT · ${shipPicked.size} BOOK${shipPicked.size === 1 ? "" : "S"}</button>
+      <div class="note" style="margin-top:6px">Nothing is charged until you tap Confirm on the quote.</div>` : ""}`;
+    document.querySelectorAll("[data-pick]").forEach(c => c.onchange = () => { c.checked ? shipPicked.add(c.dataset.pick) : shipPicked.delete(c.dataset.pick); renderShip(); });
+    const num = (id, k) => { const el = $(id); if (el) el.onchange = e => { const v = parseFloat(e.target.value); if (v > 0){ S.box = {...S.box, [k]: v}; save(); } }; };
+    num("#bL", "l"); num("#bW", "w"); num("#bH", "h"); num("#bLb", "lb");
+    if ($("#shipGo")) $("#shipGo").onclick = () => startShipment([...shipPicked]);
+    return;
+  }
+  const idx = SHIP_STEPS.findIndex(s => s[0] === sh.step);
+  const total = (sh.placementFee || 0) + (sh.carrierCost || 0);
+  m.innerHTML = `
+    <h2>Shipment · ${sh.skus.length} book${sh.skus.length === 1 ? "" : "s"}</h2>
+    <div class="card">${SHIP_STEPS.map(([k, label], i) => {
+      const done = sh.done[k], cur = i === idx || (sh.step === "done" && false);
+      const icon = done ? '<span class="pos">✓</span>' : cur && shipBusy ? '<span class="spin"></span>' : cur && sh.error ? '<span class="neg">✗</span>' : '<span class="note">○</span>';
+      return `<div class="row" style="padding:5px 0"><b style="width:20px">${icon}</b><span${done ? "" : ' class="note"'}>${label}</span></div>`;
+    }).join("")}</div>
+    ${sh.error ? `<div class="result bad">${esc(sh.error)}</div>` : ""}
+    ${sh.boxList && sh.boxList.length > 1 ? `<div class="card"><b>Amazon wants ${sh.boxList.length} separate boxes</b>
+      ${sh.boxList.map((skus, i) => `<div class="m" style="margin-top:6px"><b>Box ${i + 1}:</b> ${skus.map(k => esc((S.listed.find(x => x.sku === k) || {title: k}).title)).join(" · ")}</div>`).join("")}
+      <div class="note" style="margin-top:6px">Pack each box with only its books. Weight was split by book count.</div></div>` : ""}
+    ${sh.done.transport && !sh.done.confirm ? `
+      <div class="card">
+        <b>Quote</b>
+        <div class="money" style="grid-template-columns:repeat(3,1fr)">
+          <div><div class="v num">${money(sh.placementFee)}</div><span class="label">Placement fee</span></div>
+          <div><div class="v num">${money(sh.carrierCost)}</div><span class="label">Shipping</span></div>
+          <div><div class="v num">${money(total)}</div><span class="label">Total</span></div>
+        </div>
+        <div class="note" style="margin-top:6px">${esc(sh.carrier)} · ${sh.boxes || 1} box${(sh.boxes || 1) > 1 ? "es" : ""} · Amazon charges this to your seller account.</div>
+        <button class="btn go" id="shipOk" ${shipBusy ? "disabled" : ""}>${shipBusy ? '<span class="spin"></span> CONFIRMING…' : `CONFIRM · ${money(total)}`}</button>
+      </div>` : ""}
+    ${sh.done.labels ? `
+      <div class="result ok">✓ Shipment confirmed: <span class="num">${esc((sh.confirmIds || []).join(", "))}</span>
+        <div class="note" style="margin-top:4px">Print the box label, tape it on the box, and drop it at UPS.</div>
+        <div class="row" style="margin-top:10px;flex-wrap:wrap">${(sh.labelUrls || []).map(l => `<a class="btn pri" style="flex:1;text-decoration:none" target="_blank" rel="noopener" href="${esc(l.url)}">Box label · ${esc(l.cid)}</a>`).join("")}</div>
+        <button class="btn" id="shipNew" style="width:100%;margin-top:10px">Start a new shipment</button>
+      </div>` : ""}
+    <div class="row" style="margin-top:12px;gap:8px">
+      ${!sh.done.labels && !(sh.done.transport && !sh.done.confirm) ? `<button class="btn pri" id="shipCont" style="flex:1" ${shipBusy ? "disabled" : ""}>${shipBusy ? '<span class="spin"></span> Working…' : "Continue"}</button>` : ""}
+      ${!sh.done.confirm ? `<button class="btn" id="shipCancel" style="flex:1">Cancel plan</button>` : ""}
+    </div>
+    <div class="note" style="margin-top:10px">${sh.planId ? `Plan <span class="num">${esc(sh.planId)}</span> · ` : ""}<a style="color:var(--muted)" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/fba/sendtoamazon">Open Send to Amazon</a></div>`;
+  if ($("#shipCont")) $("#shipCont").onclick = runShipment;
+  if ($("#shipCancel")) $("#shipCancel").onclick = cancelShipment;
+  if ($("#shipOk")) $("#shipOk").onclick = () => { if (!confirm(`Confirm this shipment? Amazon will charge ${money(total)}.`)) return; sh.approved = true; save(); runShipment(); };
+  if ($("#shipNew")) $("#shipNew").onclick = () => { S.ship = null; shipPicked.clear(); save(); renderShip(); };
+}
+
+// ---------- Sales: orders, real fees, profit ----------
+let salesBusy = false, salesMsg = "";
+async function loadSales(){
+  if (salesBusy) return;
+  salesBusy = true; salesMsg = "Getting orders…"; renderSalesSoon();
+  try {
+    const after = new Date(Date.now() - S.salesDays * 864e5).toISOString().slice(0, 19) + "Z";
+    let next = null, orders = [], pages = 0;
+    do {
+      const q = next ? `NextToken=${encodeURIComponent(next)}&MarketplaceIds=${MKT}` : `MarketplaceIds=${MKT}&CreatedAfter=${after}&MaxResultsPerPage=100`;
+      const r = await spCall("GET", `/orders/v0/orders?${q}`);
+      const p = r.payload || {};
+      orders = orders.concat(p.Orders || []); next = p.NextToken; pages++;
+      if (next) await sleep(1100);
+    } while (next && pages < 5);
+    for (const o of orders){
+      const id = o.AmazonOrderId, old = S.orders[id] || {};
+      S.orders[id] = {...old, id, date: o.PurchaseDate, status: o.OrderStatus, channel: o.FulfillmentChannel, total: Number((o.OrderTotal && o.OrderTotal.Amount) || 0), latestShip: o.LatestShipDate};
+    }
+    // details for new orders, and real fees once Amazon has posted them
+    const need = Object.values(S.orders).filter(o => !o.items || (!o.feesFinal && o.status !== "Canceled" && o.status !== "Pending"));
+    let n = 0;
+    for (const o of need){
+      if (n >= 40) break;
+      salesMsg = `Reading order ${++n} of ${Math.min(need.length, 40)}…`; renderSalesSoon();
+      if (!o.items){
+        const it = await spCall("GET", `/orders/v0/orders/${o.id}/orderItems`);
+        o.items = ((it.payload && it.payload.OrderItems) || []).map(i => ({sku: i.SellerSKU, title: i.Title, qty: i.QuantityOrdered, price: Number((i.ItemPrice && i.ItemPrice.Amount) || 0)}));
+      }
+      if (o.status === "Shipped" || o.status === "PartiallyShipped"){
+        const fe = await spCall("GET", `/finances/v0/orders/${o.id}/financialEvents`);
+        const ev = (fe.payload && fe.payload.FinancialEvents && fe.payload.FinancialEvents.ShipmentEventList) || [];
+        let fees = 0, got = false;
+        for (const e of ev) for (const si of (e.ShipmentItemList || [])) for (const f of (si.ItemFeeList || [])){ fees += -Number((f.FeeAmount && f.FeeAmount.CurrencyAmount) || 0); got = true; }
+        if (got){ o.fees = +fees.toFixed(2); o.feesFinal = true; }
+      }
+      S.orders[o.id] = o; save();
+      await sleep(n > 20 ? 2100 : 300);
+    }
+    // mark sold books in Listed
+    for (const o of Object.values(S.orders)) if (o.status !== "Canceled") for (const i of (o.items || [])){ const e = S.listed.find(x => x.sku === i.sku); if (e && !e.soldAt){ e.soldAt = Date.parse(o.date) || Date.now(); e.editedAt = Date.now(); } }
+    save(); syncSoon();
+    salesMsg = `Updated ${new Date().toLocaleTimeString([], {hour: "numeric", minute: "2-digit"})}` + (need.length > 40 ? " · tap Refresh for more" : "");
+  } catch(e){ salesMsg = e.status === 404 && e.message === "not found" ? "Update the Worker first." : "Couldn't load sales: " + e.message; }
+  salesBusy = false; renderSalesSoon();
+}
+let salesSoon = 0;
+function renderSalesSoon(){ if (tab !== "sales") return; cancelAnimationFrame(salesSoon); salesSoon = requestAnimationFrame(renderSales); }
+function renderSales(){
+  const since = Date.now() - S.salesDays * 864e5;
+  const orders = Object.values(S.orders).filter(o => Date.parse(o.date) >= since).sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+  const lines = [];
+  for (const o of orders){
+    if (o.status === "Canceled") continue;
+    const items = o.items || [{sku: "", title: "(loading)", qty: 1, price: o.total}];
+    const itemTotal = items.reduce((a, i) => a + i.price, 0) || 1;
+    for (const i of items){
+      const e = S.listed.find(x => x.sku === i.sku);
+      const share = i.price / itemTotal;
+      const fees = o.fees != null ? o.fees * share : null;
+      const cost = e ? e.cost * (i.qty || 1) : null;
+      lines.push({o, i, e, fees, cost, profit: fees != null && cost != null ? i.price - fees - cost : null});
+    }
+  }
+  const sum = k => lines.reduce((a, l) => a + (l[k] || 0), 0);
+  const sales = lines.reduce((a, l) => a + l.i.price, 0), units = lines.reduce((a, l) => a + (l.i.qty || 1), 0);
+  const pick = orders.filter(o => o.channel === "MFN" && (o.status === "Unshipped" || o.status === "PartiallyShipped"));
+  $("#main").innerHTML = `
+    <h2>Sales</h2>
+    <div class="row"><select id="sDays" style="flex:1">${[7, 30, 90].map(d => `<option value="${d}" ${S.salesDays === d ? "selected" : ""}>Last ${d} days</option>`).join("")}</select>
+      <button class="btn pri" id="sLoad" ${salesBusy ? "disabled" : ""}>${salesBusy ? '<span class="spin"></span>' : "Refresh"}</button></div>
+    <div class="note" style="margin-top:6px">${esc(salesMsg)}</div>
+    <div class="money">
+      <div><div class="v num">${units}</div><span class="label">Sold</span></div>
+      <div><div class="v num">${money(sales)}</div><span class="label">Sales</span></div>
+      <div><div class="v num">${money(sum("fees"))}</div><span class="label">Fees</span></div>
+      <div><div class="v num ${sum("profit") >= 0 ? "pos" : "neg"}">${money(sum("profit"))}</div><span class="label">Profit</span></div>
+    </div>
+    <div class="note" style="margin-top:4px">Profit = price − Amazon's actual fees − your buy cost. Fees show once the order ships. Books not listed through the Lister have no cost, so they're left out of profit.</div>
+    ${pick.length ? `<h2>MF to ship (${pick.length})</h2><div class="list">${pick.map(o => (o.items || []).map(i => { const e = S.listed.find(x => x.sku === i.sku); return `
+      <div class="item" style="border-color:var(--accent)"><div class="t">${esc(i.title)}</div>
+        <div class="m">${e && e.ticket ? `<b style="color:var(--accent)">Ticket #${String(e.ticket).padStart(5, "0")} · shelf ${esc(e.shelf)}</b> · ` : ""}${esc(i.sku)} · ship by ${o.latestShip ? new Date(o.latestShip).toLocaleDateString() : "—"}</div>
+        <div class="m"><a target="_blank" rel="noopener" style="color:var(--blue)" href="https://sellercentral.amazon.com/orders-v3/order/${esc(o.id)}">Open order ${esc(o.id)}</a></div></div>`; }).join("")).join("")}</div>` : ""}
+    <h2>Orders</h2>
+    <div class="list">${lines.map(l => `
+      <div class="item">
+        <div class="t">${esc(l.i.title)}</div>
+        <div class="m"><span class="tag ${l.o.channel === "AFN" ? "fba" : "mf"}">${l.o.channel === "AFN" ? "FBA" : "MF"}</span> ${new Date(l.o.date).toLocaleDateString()} · ${esc(l.o.status)} · <span class="num">${esc(l.i.sku)}</span></div>
+        <div class="m">Price ${money(l.i.price)} · fees ${l.fees != null ? money(l.fees) : "pending"} · cost ${l.cost != null ? money(l.cost) : "—"} · <b class="${l.profit == null ? "" : l.profit >= 0 ? "pos" : "neg"}">profit ${money(l.profit)}</b></div>
+      </div>`).join("") || `<div class="note" style="margin-top:12px">${salesBusy ? "" : "No orders in this period yet."}</div>`}</div>`;
+  $("#sDays").onchange = e => { S.salesDays = +e.target.value; save(); renderSales(); loadSales(); };
+  $("#sLoad").onclick = loadSales;
+}
+
 // ---------- start ----------
-document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { closeCam(); tab = b.dataset.tab; render(); if (tab === "listed") sync(); });
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { closeCam(); tab = b.dataset.tab; render(); if (tab === "listed") sync(); if (tab === "sales" && !salesBusy && (!salesMsg || /Updated/.test(salesMsg) === false)) loadSales(); });
 // Bluetooth scanners type fast and press Enter; keep the box ready on the List tab
 document.addEventListener("keydown", e => {
   if (tab !== "list") return;
