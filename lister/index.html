@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Lister">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#111418">
+<title>Bethany Lister</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+:root{
+  --bg:#111418; --panel:#1b2026; --panel2:#232a31; --line:#2f3740;
+  --fg:#e9edf1; --muted:#8d98a4; --accent:#f5a623; --accent-ink:#1a1204;
+  --buy:#22c55e; --skip:#e5534b; --warn:#eab308; --blue:#38bdf8;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Barlow",system-ui,-apple-system,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.4 var(--body);-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+input,select,textarea{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+textarea{resize:vertical;min-height:64px}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.app{display:flex;flex-direction:column;height:100%;padding-top:env(safe-area-inset-top,0px)}
+main{flex:1;overflow-y:auto;padding:12px max(14px,env(safe-area-inset-left,0px)) 24px max(14px,env(safe-area-inset-right,0px))}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+h1{font:700 19px/1 var(--display);letter-spacing:.03em;margin:0;text-transform:uppercase;white-space:nowrap}
+h2{font:700 20px/1.1 var(--display);letter-spacing:.03em;margin:14px 0 8px;text-transform:uppercase}
+.note{color:var(--muted);font-size:13px}
+nav.tabs{display:grid;grid-template-columns:repeat(3,1fr);background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
+nav.tabs button{padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--muted);font-size:12px}
+nav.tabs button[aria-current="true"]{color:var(--accent)}
+nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
+.top{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.top a{margin-left:auto;padding:6px 10px;flex:none}
+.top .seg{flex:none}
+.top .seg button{padding:5px 10px}
+.seg{display:inline-flex;border:1.5px solid var(--accent);border-radius:9px;overflow:hidden}
+.seg button{padding:6px 12px;font:700 15px var(--display);letter-spacing:.06em;color:var(--accent)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.seg.wide{display:grid;grid-template-columns:repeat(5,1fr);width:100%}
+.seg.wide button{padding:8px 2px;font-size:14px}
+.seg.wide button+button{border-left:1px solid var(--accent)}
+.scanrow{display:flex;gap:8px}
+.scanrow input{flex:1}
+.btn{padding:12px;border-radius:10px;font-weight:700;background:var(--panel2);border:1px solid var(--line);text-align:center}
+.btn.pri{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.go{background:var(--buy);color:#05230f;border-color:var(--buy);font:700 22px var(--display);letter-spacing:.06em;width:100%;margin-top:14px;padding:14px}
+.btn:disabled{opacity:.45}
+.mini{font-size:13px;padding:6px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel2)}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1.5px solid var(--line);border-radius:999px;font-size:14px;font-weight:600;color:var(--fg);text-decoration:none;background:var(--panel)}
+.chip.acc{border-color:var(--accent);color:var(--accent)}
+.cam{position:fixed;inset:0;z-index:50;background:#000;display:flex;flex-direction:column}
+.cam video{flex:1;width:100%;min-height:0;object-fit:cover;display:block}
+.cam .reticle{position:absolute;left:8%;right:8%;top:38%;height:22%;border:3px dashed var(--buy);border-radius:12px;pointer-events:none}
+.cam .bar{position:absolute;left:0;right:0;bottom:0;display:flex;gap:10px;justify-content:center;padding:14px 14px calc(14px + env(safe-area-inset-bottom,0px));background:linear-gradient(transparent,rgba(0,0,0,.75))}
+.cam .bar .btn{min-width:110px}
+.cam .hint{position:absolute;top:calc(14px + env(safe-area-inset-top,0px));left:0;right:0;text-align:center;font-weight:700;text-shadow:0 1px 3px #000}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:12px}
+.prod{display:flex;gap:12px;align-items:flex-start}
+.prod img{width:70px;height:90px;object-fit:contain;background:#fff;border-radius:8px;flex:none}
+.prod .t{font-weight:600;font-size:17px;line-height:1.25}
+.prod .meta{color:var(--muted);font-size:13px;margin-top:3px}
+.asin{color:var(--accent);font-weight:700;margin-top:4px}
+.matches{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.matches button{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 9px;background:var(--panel2);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gate{margin-top:10px;border-radius:10px;padding:10px 12px;font-weight:700;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.gate.ok{background:rgba(34,197,94,.14);color:var(--buy)}
+.gate.bad{background:rgba(229,83,75,.16);color:var(--skip)}
+.gate.wait{background:var(--panel2);color:var(--muted)}
+.gate .msg{font-weight:500;font-size:13px;color:var(--fg);flex-basis:100%}
+.offers{display:flex;flex-direction:column;gap:1px;background:var(--line);border-radius:10px;overflow:hidden;margin-top:8px}
+.offers button{display:grid;grid-template-columns:52px 1fr auto;align-items:center;gap:8px;background:var(--panel2);padding:9px 12px;text-align:left}
+.offers button[aria-pressed="true"]{outline:2px solid var(--accent);outline-offset:-2px}
+.tag{font:700 12px var(--display);letter-spacing:.08em;border-radius:6px;padding:2px 6px;text-align:center}
+.tag.fba{background:rgba(56,189,248,.18);color:var(--blue)}
+.tag.mf{background:rgba(141,152,164,.18);color:var(--muted)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px}
+.field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);margin-top:10px}
+.grid2 .field,.grid3 .field{margin-top:0}
+.money{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:12px;background:var(--panel)}
+.money>div{padding:9px 4px;text-align:center}
+.money>div+div{border-left:1px solid var(--line)}
+.money .v{font:700 22px/1.15 var(--display)}
+.pos{color:var(--buy)} .neg{color:var(--skip)}
+.result{margin-top:12px;border-radius:10px;padding:12px;font-weight:600}
+.result.ok{background:rgba(34,197,94,.14);color:var(--buy)}
+.result.bad{background:rgba(229,83,75,.16);color:var(--skip)}
+.result ul{margin:6px 0 0;padding-left:18px;color:var(--fg);font-weight:500;font-size:13px}
+.row{display:flex;gap:8px;align-items:center}
+.list .item{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px}
+.list .item .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.list .item .m{font-size:13px;color:var(--muted);margin-top:2px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(80px + env(safe-area-inset-bottom,0px));background:var(--fg);color:var(--bg);padding:9px 16px;border-radius:999px;font-weight:600;z-index:60;max-width:90%;text-align:center}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}
+#labelSheet{display:none}
+.lblprev{background:#fff;color:#000;border-radius:6px;margin:10px auto 0;box-shadow:0 2px 10px rgba(0,0,0,.5);overflow:hidden}
+.lbl{box-sizing:border-box;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column;justify-content:center;align-items:center;overflow:hidden}
+.lbl svg{display:block;width:100%}
+.lbl .fn{font-weight:700;letter-spacing:.06em;line-height:1}
+.lbl .tt{width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;line-height:1.1}
+.lbl .cd{font-weight:700;line-height:1.1}
+@media print{
+  body *{visibility:hidden!important}
+  #labelSheet,#labelSheet *{visibility:visible!important}
+  #labelSheet{display:block!important;position:absolute;left:0;top:0}
+  #labelSheet .lbl{page-break-after:always;break-after:page}
+}
+</style>
+</head>
+<body>
+<div class="app">
+<main id="main"></main>
+<nav class="tabs" id="tabs">
+  <button data-tab="list" aria-current="true"><svg viewBox="0 0 24 24"><path d="M4 7V5h3M17 5h3v2M20 17v2h-3M7 19H4v-2M7 9v6M10 9v6M13 9v6M16 9v6"/></svg>List</button>
+  <button data-tab="listed"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>Listed</button>
+  <button data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z"/></svg>Settings</button>
+</nav>
+</div>
+<div class="cam" id="cam" hidden>
+  <video id="video" autoplay muted playsinline></video>
+  <div class="reticle"></div>
+  <div class="hint">Fit the barcode in the green box</div>
+  <div class="bar"><button class="btn" id="torchBtn" hidden>Light</button><button class="btn pri" id="camClose">Close</button></div>
+</div>
+<script>
+// ---------- storage ----------
+const LS = {
+  get(k, d){ try { const v = localStorage.getItem("bl_" + k); return v == null ? d : JSON.parse(v); } catch(e){ return d; } },
+  set(k, v){ try { localStorage.setItem("bl_" + k, JSON.stringify(v)); } catch(e){} }
+};
+const CONDS = [
+  {id:"new",        short:"NEW", name:"New",        offer:"New"},
+  {id:"like_new",   short:"LN",  name:"Like New",   offer:"Used"},
+  {id:"very_good",  short:"VG",  name:"Very Good",  offer:"Used"},
+  {id:"good",       short:"G",   name:"Good",       offer:"Used"},
+  {id:"acceptable", short:"AC",  name:"Acceptable", offer:"Used"},
+];
+const DEF_NOTES = {
+  new: "Brand new, unread copy.",
+  like_new: "Like new. Clean pages, tight binding, no markings.",
+  very_good: "Very good. Light shelf wear on cover. Pages clean, no markings.",
+  good: "Good. Visible wear on cover and edges. Pages intact and readable.",
+  acceptable: "Acceptable. Heavy wear, may have markings or highlighting. All pages present."
+};
+const S = {
+  worker: LS.get("worker", "https://bethanylister.wickedgoodproducts.workers.dev"),
+  key: LS.get("key", ""),
+  channel: LS.get("channel", "fba"),
+  cond: LS.get("cond", "very_good"),
+  skuFba: LS.get("skuFba", "{DATE}-{COND}-{COST}-{RAND}"),
+  skuMf: LS.get("skuMf", "MF{TICKET}-{COND}-{COST}"),
+  ticket: LS.get("ticket", 1),
+  shelf: LS.get("shelf", "A1"),
+  notes: LS.get("notes", DEF_NOTES),
+  listed: LS.get("listed", []),
+  labelSize: LS.get("labelSize", "30334"),
+};
+function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize"]) LS.set(k, S[k]); }
+
+// ---------- helpers ----------
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = v => v == null || isNaN(v) ? "—" : (v < 0 ? "−$" : "$") + Math.abs(v).toFixed(2);
+function toast(msg){ const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t); setTimeout(() => t.remove(), 2200); }
+const condOf = id => CONDS.find(c => c.id === id) || CONDS[2];
+
+async function api(path, opts = {}){
+  if (!S.worker || !S.key) throw new Error("Add your Worker URL and app key in Settings.");
+  let r;
+  try {
+    r = await fetch(S.worker.replace(/\/+$/, "") + path, {...opts, headers: {"x-app-key": S.key, "content-type": "application/json"}});
+  } catch(e){ throw new Error("Can't reach the Worker. Check your connection and the Worker URL."); }
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 401) throw new Error("Wrong app key. It must match APP_KEY in Cloudflare.");
+  if (!r.ok){
+    const m = d.error || (d.errors && d.errors[0] && (d.errors[0].message + (d.errors[0].details ? " " + d.errors[0].details : ""))) || ("Error " + r.status);
+    const err = new Error(m); err.status = r.status; throw err;
+  }
+  return d;
+}
+
+// ---------- state for the item being listed ----------
+let tab = "list";
+let item = null;   // {code, asin, title, img, matches:[], cost, price, gate, gateMsg, gateLink, offers:{New,Used}, fees, result}
+let feeTimer = null;
+
+function blankItem(code){
+  return {code, asin:null, title:"", img:"", matches:[], cost:"", price:"", note:S.notes[S.cond] || "", qty:1,
+    loading:true, err:null, gate:null, gateMsg:"", gateLink:"", offers:{}, offersErr:null, fees:null, feesErr:null,
+    sku:"", result:null, busy:false};
+}
+
+// ---------- lookup ----------
+async function lookup(raw){
+  const code = String(raw || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+  if (!code) return;
+  closeCam();
+  const keep = item && item.code === code ? item : null;
+  item = blankItem(code);
+  if (keep){ item.cost = keep.cost; item.price = keep.price; }
+  const qs = new URLSearchParams(location.search);
+  if (qs.get("code") === raw){ item.cost = qs.get("cost") || ""; item.price = qs.get("price") || ""; }
+  render();
+  try {
+    if (/^B0[0-9A-Z]{8}$/.test(code)){
+      item.asin = code; item.title = code;
+    } else {
+      const d = await api("/lookup?code=" + encodeURIComponent(code));
+      const items = (d.items || []).map(x => ({
+        asin: x.asin,
+        title: (x.summaries && x.summaries[0] && x.summaries[0].itemName) || x.asin,
+        img: (x.images && x.images[0] && x.images[0].images && x.images[0].images[0] && x.images[0].images[0].link) || "",
+        productType: (x.productTypes && x.productTypes[0] && x.productTypes[0].productType) || null
+      }));
+      if (!items.length) throw new Error("No Amazon listing found for " + code + ".");
+      item.matches = items;
+      Object.assign(item, items[0]);
+    }
+    item.loading = false;
+    item.sku = buildSku();
+    render();
+    loadGate(); loadOffers();
+    if (item.price) queueFees();
+  } catch(e){ item.loading = false; item.err = e.message; render(); }
+}
+function choose(i){
+  const m = item.matches[i]; if (!m) return;
+  Object.assign(item, m, {gate:null, offers:{}, fees:null, result:null});
+  render(); loadGate(); loadOffers();
+}
+
+async function loadGate(){
+  const it = item; it.gate = "wait"; renderSoon();
+  try {
+    const d = await api(`/restrictions?asin=${it.asin}&condition=${S.cond}`);
+    if (it !== item) return;
+    const r = (d.restrictions || []).flatMap(x => x.reasons || []);
+    if (!r.length){ it.gate = "ok"; it.gateMsg = ""; it.gateLink = ""; }
+    else {
+      it.gate = "bad";
+      it.gateMsg = r.map(x => x.message).filter(Boolean).join(" ");
+      const link = r.flatMap(x => x.links || []).find(l => l.resource);
+      it.gateLink = link ? link.resource : `https://sellercentral.amazon.com/hz/approvalrequest/restrictions/approve?asin=${it.asin}`;
+    }
+  } catch(e){ if (it !== item) return; it.gate = "err"; it.gateMsg = e.message; }
+  render();
+}
+
+async function loadOffers(){
+  const it = item, kind = condOf(S.cond).offer;
+  if (it.offers[kind]){ render(); return; }
+  it.offersErr = null; it.offersLoading = true; renderSoon();
+  try {
+    const d = await api(`/offers?asin=${it.asin}&itemCondition=${kind}`);
+    if (it !== item) return;
+    const list = ((d.payload && d.payload.Offers) || []).map(o => ({
+      price: +(((o.ListingPrice && o.ListingPrice.Amount) || 0) + ((o.Shipping && o.Shipping.Amount) || 0)).toFixed(2),
+      fba: !!o.IsFulfilledByAmazon, sub: String(o.SubCondition || "").replace(/_/g, " "), bb: !!o.IsBuyBoxWinner
+    })).sort((a, b) => a.price - b.price);
+    it.offers[kind] = list;
+    // default price: lowest offer of the same channel, else lowest overall
+    if (!it.price && list.length){
+      const same = list.find(o => o.fba === (S.channel === "fba")) || list[0];
+      it.price = same.price.toFixed(2);
+      queueFees();
+    }
+  } catch(e){ if (it !== item) return; it.offersErr = e.message; }
+  it.offersLoading = false;
+  render();
+}
+
+function queueFees(){
+  clearTimeout(feeTimer);
+  feeTimer = setTimeout(loadFees, 600);
+}
+async function loadFees(){
+  const it = item; if (!it || !it.asin) return;
+  const price = parseFloat(it.price);
+  if (!(price > 0)){ it.fees = null; renderMoney(); return; }
+  it.feesErr = null;
+  try {
+    const d = await api(`/fees?asin=${it.asin}&price=${price}&fba=${S.channel === "fba" ? 1 : 0}`);
+    if (it !== item) return;
+    const est = d.payload && d.payload.FeesEstimateResult;
+    if (est && est.Status === "Success"){ it.fees = est.FeesEstimate.TotalFeesEstimate.Amount; it.feesFor = price; }
+    else { it.fees = null; it.feesErr = (est && est.Error && est.Error.Message) || "No fee estimate"; }
+  } catch(e){ if (it !== item) return; it.fees = null; it.feesErr = e.message; }
+  renderMoney();
+}
+
+// ---------- SKU ----------
+function buildSku(){
+  const d = new Date(), p = n => String(n).padStart(2, "0");
+  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
+  const cost = (parseFloat(item && item.cost) || 0).toFixed(2);
+  const pattern = S.channel === "mf" ? S.skuMf : S.skuFba;
+  return pattern
+    .replace(/\{DATE\}/g, String(d.getFullYear()).slice(2) + p(d.getMonth() + 1) + p(d.getDate()))
+    .replace(/\{COND\}/g, condOf(S.cond).short)
+    .replace(/\{COST\}/g, cost)
+    .replace(/\{RAND\}/g, rand)
+    .replace(/\{TICKET\}/g, String(S.ticket).padStart(5, "0"))
+    .replace(/\{SHELF\}/g, S.shelf)
+    .replace(/\s+/g, "").slice(0, 40);
+}
+function ticketTaken(n){ return S.listed.some(x => x.channel === "mf" && x.ticket === n); }
+
+// ---------- list it ----------
+async function listIt(){
+  const it = item;
+  const price = parseFloat(it.price);
+  if (!(price > 0)){ toast("Enter a price"); return; }
+  if (!it.sku){ toast("Enter a SKU"); return; }
+  if (S.listed.some(x => x.sku === it.sku)){ toast("That SKU was already used. Change it."); return; }
+  if (S.channel === "mf" && ticketTaken(S.ticket)){ toast("Ticket " + S.ticket + " is already used. Change it in Settings."); return; }
+  it.busy = true; it.result = null; render();
+  try {
+    const d = await api("/list", {method: "POST", body: JSON.stringify({
+      sku: it.sku, asin: it.asin, productType: it.productType || undefined, condition: S.cond, note: it.note.trim(), price,
+      fba: S.channel === "fba", qty: S.channel === "mf" ? (parseInt(it.qty) || 1) : undefined
+    })});
+    const errs = (d.issues || []).filter(i => i.severity === "ERROR");
+    if (d.status === "ACCEPTED" && !errs.length){
+      const entry = {at: Date.now(), sku: it.sku, asin: it.asin, productType: it.productType || null, code: it.code, title: it.title, cond: S.cond, channel: S.channel,
+        price, cost: parseFloat(it.cost) || 0, ticket: S.channel === "mf" ? S.ticket : null, shelf: S.channel === "mf" ? S.shelf : null,
+        warnings: (d.issues || []).map(i => i.message)};
+      S.listed.unshift(entry);
+      if (S.channel === "mf"){ do { S.ticket++; } while (ticketTaken(S.ticket)); }
+      save(); syncSoon();
+      it.result = {ok: true, entry};
+      if (entry.channel === "fba") setTimeout(() => watchFnsku(entry), 0);
+    } else {
+      it.result = {ok: false, msgs: (errs.length ? errs : (d.issues || [])).map(i => i.message + (i.attributeNames ? " (" + i.attributeNames.join(", ") + ")" : "")), status: d.status};
+    }
+  } catch(e){ it.result = {ok: false, msgs: [e.message]}; }
+  it.busy = false; render();
+}
+
+// ---------- sync Listed + MF ticket between devices (Worker KV) ----------
+let syncTimer = null, syncInfo = LS.get("syncInfo", null);
+function syncSoon(){ clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800); }
+async function sync(){
+  if (!S.worker || !S.key) return;
+  try {
+    const d = await api("/sync", {method: "POST", body: JSON.stringify({listed: S.listed, ticket: S.ticket})});
+    S.listed = d.listed || S.listed;
+    S.ticket = Math.max(S.ticket, d.ticket || 1);
+    while (ticketTaken(S.ticket)) S.ticket++;
+    save();
+    syncInfo = {ok: true, at: Date.now()};
+  } catch(e){
+    syncInfo = {ok: false, at: Date.now(), msg: e.status === 501 ? "Sync is off: the Worker has no KV storage named LISTED." : e.status === 404 ? "Sync is off: update the Worker code." : e.message};
+  }
+  LS.set("syncInfo", syncInfo);
+  if (tab === "listed") renderListed();
+}
+function syncLine(){
+  if (!syncInfo) return "Not synced yet";
+  const t = new Date(syncInfo.at).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+  return syncInfo.ok ? `<span class="pos">✓ Synced ${t}</span>` : `<span class="neg">${esc(syncInfo.msg)}</span>`;
+}
+
+// ---------- check a listing on Amazon ----------
+async function checkStatus(entry){
+  const st = {at: Date.now()};
+  try {
+    const d = await api("/status?sku=" + encodeURIComponent(entry.sku));
+    const sum = (d.summaries || [])[0] || {};
+    const flags = sum.status || [];
+    const errs = (d.issues || []).filter(i => i.severity === "ERROR");
+    const warns = (d.issues || []).filter(i => i.severity !== "ERROR");
+    const fa = (d.fulfillmentAvailability || [])[0] || {};
+    st.qty = fa.quantity;
+    st.chan = fa.fulfillmentChannelCode ? (/^AMAZON/.test(fa.fulfillmentChannelCode) ? "FBA" : "FBM") : null;
+    const off = (d.offers || [])[0];
+    st.price = off && off.price ? Number(off.price.amount ?? off.price.Amount) : null;
+    st.fnsku = sum.fnSku || null;
+    if (sum.productType) entry.productType = sum.productType;
+    st.msgs = errs.concat(warns).map(i => i.message);
+    if (errs.length){ st.state = "error"; st.label = "Problem on Amazon"; }
+    else if (st.price == null){ st.state = "inactive"; st.label = "Listed · price not applied yet"; }
+    else if (flags.includes("BUYABLE")){ st.state = "active"; st.label = "Active · buyers can see it"; }
+    else if (entry.channel === "fba"){ st.state = "inactive"; st.label = "Listed · inactive until Amazon gets your stock"; }
+    else { st.state = "inactive"; st.label = "Listed · inactive"; }
+  } catch(e){
+    if (e.status === 404 && e.message === "not found"){ st.state = "fail"; st.label = "Worker needs the update"; st.msgs = ["Paste the newest Worker code into Cloudflare and Deploy."]; }
+    else if (e.status === 404){ st.state = "missing"; st.label = "Not found on Amazon yet"; st.msgs = ["New listings can take up to 15 minutes to show up. If it's still missing later, check Fix Your Products."]; }
+    else { st.state = "fail"; st.label = "Couldn't check"; st.msgs = [e.message]; }
+  }
+  entry.status = st; save(); syncSoon();
+  return st;
+}
+async function fixListing(entry){
+  try {
+    const d = await api("/fix", {method: "POST", body: JSON.stringify({sku: entry.sku, productType: entry.productType || undefined,
+      price: entry.price, fba: entry.channel === "fba", qty: entry.channel === "mf" ? 1 : undefined})});
+    const errs = (d.issues || []).filter(i => i.severity === "ERROR");
+    if (d.status === "ACCEPTED" && !errs.length) toast("Sent. Check again in a few minutes.");
+    else toast("Amazon: " + ((errs[0] || (d.issues || [])[0] || {}).message || d.status));
+  } catch(e){
+    toast(e.status === 404 && e.message === "not found" ? "Update the Worker first" : e.message);
+  }
+}
+function statusHTML(st){
+  if (!st) return "";
+  const cls = st.state === "active" ? "pos" : st.state === "error" || st.state === "fail" ? "neg" : "";
+  const icon = st.state === "active" ? "✓" : st.state === "error" ? "⚠" : st.state === "missing" ? "…" : st.state === "fail" ? "✗" : "●";
+  return `<div class="m"><b class="${cls}">${icon} ${esc(st.label)}</b>${st.chan ? ` · ${st.chan}` : ""}${!("price" in st) ? "" : st.price != null ? ` · ${money(st.price)}` : " · no price yet"}${st.qty != null ? ` · qty ${st.qty}` : ""}${st.fnsku ? ` · FNSKU <span class="num">${esc(st.fnsku)}</span>` : ""} · checked ${new Date(st.at).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"})}</div>
+    ${st.msgs && st.msgs.length ? `<ul style="margin:4px 0 0;padding-left:18px;font-size:13px">${st.msgs.map(m => `<li>${esc(m)}</li>`).join("")}</ul>` : ""}`;
+}
+
+// ---------- FNSKU labels (Code 128) ----------
+const LABELS = {
+  "30334": {name: "Dymo 30334 · 2.25\" x 1.25\"", w: 2.25, h: 1.25},
+  "30336": {name: "Dymo 30336 · 2.125\" x 1\"", w: 2.125, h: 1},
+  "30252": {name: "Dymo 30252 · 3.5\" x 1.125\"", w: 3.5, h: 1.125},
+};
+const C128 = ["212222","222122","222221","121223","121322","131222","122213","122312","132212","221213","221312","231212","112232","122132","122231","113222","123122","123221","223211","221132","221231","213212","223112","312131","311222","321122","321221","312212","322112","322211","212123","212321","232121","111323","131123","131321","112313","132113","132311","211313","231113","231311","112133","112331","132131","113123","113321","133121","313121","211331","231131","213113","213311","213131","311123","311321","331121","312113","312311","332111","314111","221411","431111","111224","111422","121124","121421","141122","141221","112214","112412","122114","122411","142112","142211","241211","221114","413111","241112","134111","111242","121142","121241","114212","124112","124211","411212","421112","421211","212141","214121","412121","111143","111341","131141","114113","114311","411113","411311","113141","114131","311141","411131","211412","211214","211232","2331112"];
+function code128Svg(text){
+  const data = [...text].map(ch => ch.charCodeAt(0) - 32);
+  if (data.some(v => v < 0 || v > 94)) throw new Error("Bad characters in " + text);
+  const vals = [104].concat(data);
+  let sum = 104; for (let i = 1; i < vals.length; i++) sum += vals[i] * i;
+  vals.push(sum % 103, 106);
+  const widths = vals.map(v => C128[v]).join("");
+  const quiet = 10; let x = quiet, rects = "";
+  for (let i = 0; i < widths.length; i++){
+    const w = +widths[i];
+    if (i % 2 === 0) rects += `<rect x="${x}" y="0" width="${w}" height="40"/>`;
+    x += w;
+  }
+  return `<svg viewBox="0 0 ${x + quiet} 40" preserveAspectRatio="none" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg">${rects}</svg>`;
+}
+function labelHTML(entry, fnsku){
+  const L = LABELS[S.labelSize] || LABELS["30334"];
+  const pad = 0.06, h = L.h, cond = entry.cond === "new" ? "New" : "Used - " + condOf(entry.cond).name;
+  const title = String(entry.title || "").slice(0, 80);
+  return `<div class="lbl" style="width:${L.w}in;height:${h}in;padding:${pad}in ${pad * 2}in">
+    <div style="width:100%;height:${(h * 0.48).toFixed(3)}in">${code128Svg(fnsku)}</div>
+    <div class="fn" style="font-size:${(h * 8.5).toFixed(1)}pt;margin-top:.02in">${esc(fnsku)}</div>
+    <div class="tt" style="font-size:${(h * 6).toFixed(1)}pt">${esc(title)}</div>
+    <div class="cd" style="font-size:${(h * 6.2).toFixed(1)}pt">${esc(cond)}</div>
+  </div>`;
+}
+function printLabels(entry, fnsku, qty){
+  fnsku = String(fnsku || "").trim().toUpperCase();
+  if (!/^[A-Z0-9]{10}$/.test(fnsku)){ toast("FNSKU should be 10 letters/numbers, like X00ABC1234"); return; }
+  const L = LABELS[S.labelSize] || LABELS["30334"];
+  let sheet = $("#labelSheet");
+  if (!sheet){ sheet = document.createElement("div"); sheet.id = "labelSheet"; document.body.appendChild(sheet); }
+  sheet.innerHTML = Array.from({length: Math.max(1, qty || 1)}, () => labelHTML(entry, fnsku)).join("");
+  let st = $("#labelPage");
+  if (!st){ st = document.createElement("style"); st.id = "labelPage"; document.head.appendChild(st); }
+  st.textContent = `@page{size:${L.w}in ${L.h}in;margin:0}`;
+  setTimeout(() => window.print(), 50);
+}
+function askAndPrint(entry){
+  const known = entry.status && entry.status.fnsku;
+  const fn = known || prompt("FNSKU for this book (starts with X00). Find it in Manage All Inventory.", "");
+  if (!fn) return;
+  const q = parseInt(prompt("How many labels?", "1")) || 1;
+  printLabels(entry, fn, q);
+}
+// after listing on FBA: ask Amazon every 30s until the FNSKU exists (max 15 min)
+let fnPoll = null;
+function watchFnsku(entry){
+  clearTimeout(fnPoll);
+  let tries = 0;
+  const step = async () => {
+    if (!item || !item.result || !item.result.ok || item.result.entry.sku !== entry.sku) return;
+    tries++;
+    await checkStatus(entry);
+    if (!item || !item.result || item.result.entry.sku !== entry.sku) return;
+    const box = $("#checkRes"); if (box) box.innerHTML = statusHTML(entry.status);
+    const pb = $("#printLbl");
+    if (entry.status && entry.status.fnsku){
+      if (pb){ pb.disabled = false; pb.textContent = "Print label · " + entry.status.fnsku; }
+      if (navigator.vibrate) navigator.vibrate([60, 60, 60]);
+      return;
+    }
+    if (pb) pb.innerHTML = '<span class="spin"></span> Waiting for FNSKU…';
+    if (tries < 30) fnPoll = setTimeout(step, 30000);
+    else if (pb){ pb.disabled = false; pb.textContent = "Print label (type FNSKU)"; }
+  };
+  fnPoll = setTimeout(step, 20000);
+}
+
+// ---------- camera (same method as Scout: own decode loop on the box area) ----------
+let stream = null, camTimer = null, camSession = 0, native = null, zxReader = null, wideTick = 0, torchOn = false;
+const scanCanvas = document.createElement("canvas");
+const streamLive = () => stream && stream.getVideoTracks().some(t => t.readyState === "live");
+function getZx(){
+  if (zxReader || typeof ZXing === "undefined") return zxReader;
+  const hints = new Map();
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E, ZXing.BarcodeFormat.EAN_8]);
+  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  zxReader = new ZXing.MultiFormatReader(); zxReader.setHints(hints);
+  return zxReader;
+}
+// map the green box on screen to the same area of the camera picture (picture is cropped to fill the screen)
+function boxInVideo(video){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const v = video.getBoundingClientRect(), r = document.querySelector("#cam .reticle").getBoundingClientRect();
+  if (!v.width || !r.width) return {sx:vw*0.08, sy:vh*0.38, sw:vw*0.84, sh:vh*0.22};
+  const k = Math.max(v.width/vw, v.height/vh), ox = (v.width - vw*k)/2, oy = (v.height - vh*k)/2;
+  let sx = (r.left - v.left - ox)/k, sy = (r.top - v.top - oy)/k, sw = r.width/k, sh = r.height/k;
+  sx = Math.max(0, sx); sy = Math.max(0, sy); sw = Math.min(vw - sx, sw); sh = Math.min(vh - sy, sh);
+  return {sx, sy, sw, sh};
+}
+function zxDecode(video, area){
+  const {sx, sy, sw, sh} = area;
+  const scale = Math.min(1, 1280/sw), w = Math.round(sw*scale), h = Math.round(sh*scale);
+  if (!w || !h) return null;
+  scanCanvas.width = w; scanCanvas.height = h;
+  const g = scanCanvas.getContext("2d", {willReadFrequently:true});
+  g.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data, lum = new Uint8ClampedArray(w*h);
+  for (let i = 0, j = 0; j < lum.length; i += 4, j++) lum[j] = (d[i]*77 + d[i+1]*150 + d[i+2]*29) >> 8;
+  try { return getZx().decodeWithState(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.RGBLuminanceSource(lum, w, h)))).getText(); }
+  catch(e){ return null; }
+}
+function freshVideo(){
+  // iPhone Safari can freeze a reused <video>, so swap in a new one each time
+  const old = $("#video"), v = document.createElement("video");
+  v.id = "video"; v.autoplay = true; v.muted = true; v.playsInline = true;
+  v.setAttribute("autoplay", ""); v.setAttribute("muted", ""); v.setAttribute("playsinline", "");
+  old.replaceWith(v);
+  return v;
+}
+async function openCam(){
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ toast("Camera needs https."); return; }
+  if (!window.ZXing && !("BarcodeDetector" in window)){ toast("Scanner didn't load. Reload the page."); return; }
+  if (native === null && "BarcodeDetector" in window){
+    try { const f = await BarcodeDetector.getSupportedFormats(); native = f.includes("ean_13") ? new BarcodeDetector({formats:["ean_13","upc_a","upc_e","ean_8"].filter(x => f.includes(x))}) : false; } catch(e){ native = false; }
+  }
+  $("#cam").hidden = false;
+  if (!streamLive()){
+    if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+    try { stream = await navigator.mediaDevices.getUserMedia({audio:false, video:{facingMode:{ideal:"environment"}, width:{ideal:1920}, height:{ideal:1080}}}); }
+    catch(e){ $("#cam").hidden = true; toast("Camera blocked. Settings > Safari > Camera > Allow."); return; }
+    try { await stream.getVideoTracks()[0].applyConstraints({advanced:[{focusMode:"continuous"}]}); } catch(e){}
+  }
+  try { const c = stream.getVideoTracks()[0].getCapabilities(); $("#torchBtn").hidden = !c.torch; } catch(e){ $("#torchBtn").hidden = true; }
+  const video = freshVideo();
+  video.srcObject = stream;
+  try { await video.play(); } catch(e){}
+  const session = ++camSession;
+  const tick = async () => {
+    if (session !== camSession || $("#cam").hidden || !streamLive()) return;
+    if (video.readyState >= 2 && video.videoWidth){
+      let code = null;
+      try {
+        if (native){ const r = await native.detect(video); if (r && r.length) code = r[0].rawValue; }
+        else if (window.ZXing){
+          code = zxDecode(video, boxInVideo(video));
+          if (!code && (++wideTick % 4 === 0)){ const vw = video.videoWidth, vh = video.videoHeight; code = zxDecode(video, {sx:vw*0.05, sy:vh*0.30, sw:vw*0.90, sh:vh*0.40}); }
+        }
+      } catch(e){ zxReader = null; }
+      if (session !== camSession) return;
+      if (code){
+        if (navigator.vibrate) navigator.vibrate(60);
+        closeCam();
+        const c = $("#code"); if (c) c.value = code;
+        lookup(code);
+        return;
+      }
+    } else if (video.paused){ try { await video.play(); } catch(e){} }
+    camTimer = setTimeout(tick, native ? 80 : 30);
+  };
+  tick();
+}
+function closeCam(){
+  camSession++;
+  clearTimeout(camTimer); camTimer = null;
+  if (torchOn){ torchOn = false; try { stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:false}]}); } catch(e){} }
+  const v = $("#video"); try { v.pause(); } catch(e){}
+  $("#cam").hidden = true;
+}
+function stopStream(){
+  if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+  const v = $("#video"); if (v) v.srcObject = null;
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden){ closeCam(); stopStream(); } });
+$("#camClose").onclick = closeCam;
+$("#torchBtn").onclick = async () => {
+  torchOn = !torchOn;
+  try { await stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:torchOn}]}); } catch(e){ torchOn = false; }
+  $("#torchBtn").textContent = torchOn ? "Light off" : "Light";
+};
+
+// ---------- render ----------
+let soon = 0;
+function renderSoon(){ cancelAnimationFrame(soon); soon = requestAnimationFrame(render); }
+function render(){
+  // keep the cursor where it was if a background update redraws the screen while typing
+  const a = document.activeElement, id = a && a.id && /INPUT|TEXTAREA/.test(a.tagName) ? a.id : null;
+  const sel = id ? [a.selectionStart, a.selectionEnd] : null;
+  document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-current", String(b.dataset.tab === tab)));
+  if (tab === "list") renderList();
+  else if (tab === "listed") renderListed();
+  else renderSettings();
+  if (id){ const n = document.getElementById(id); if (n){ n.focus(); try { n.setSelectionRange(sel[0], sel[1]); } catch(e){} } }
+}
+
+function moneyHTML(){
+  const price = parseFloat(item.price), cost = parseFloat(item.cost) || 0;
+  const fees = item.fees != null && item.feesFor === price ? item.fees : null;
+  const payout = fees != null ? price - fees : null;
+  const profit = payout != null ? payout - cost : null;
+  const roi = profit != null && cost > 0 ? Math.round(profit / cost * 100) + "%" : "—";
+  return `
+    <div><div class="v num">${fees != null ? money(fees) : (price > 0 && !item.feesErr ? '<span class="spin"></span>' : "—")}</div><span class="label">Fees</span></div>
+    <div><div class="v num">${money(payout)}</div><span class="label">Payout</span></div>
+    <div><div class="v num ${profit == null ? "" : profit >= 0 ? "pos" : "neg"}">${money(profit)}</div><span class="label">Profit</span></div>
+    <div><div class="v num">${roi}</div><span class="label">ROI</span></div>`;
+}
+function renderMoney(){
+  const m = $("#money"); if (m && item) m.innerHTML = moneyHTML();
+  const fe = $("#feesErr"); if (fe) fe.textContent = item && item.feesErr ? "Fees: " + item.feesErr : "";
+}
+
+function gateHTML(){
+  if (!item.gate || item.gate === "wait") return `<div class="gate wait"><span class="spin"></span> Checking restrictions for ${esc(condOf(S.cond).name)}…</div>`;
+  if (item.gate === "ok") return `<div class="gate ok">✓ Not restricted · ${esc(condOf(S.cond).name)}</div>`;
+  if (item.gate === "bad") return `<div class="gate bad">⚠ RESTRICTED · ${esc(condOf(S.cond).name)}
+      <a class="chip acc" target="_blank" rel="noopener" href="${esc(item.gateLink)}">Request approval</a>
+      <span class="msg">${esc(item.gateMsg)}</span></div>`;
+  return `<div class="gate wait">Couldn't check restrictions: ${esc(item.gateMsg)}</div>`;
+}
+function offersHTML(){
+  const kind = condOf(S.cond).offer, list = item.offers[kind];
+  if (item.offersLoading && !list) return `<div class="note" style="margin-top:8px"><span class="spin"></span> Loading ${kind.toLowerCase()} offers…</div>`;
+  if (item.offersErr) return `<div class="note" style="margin-top:8px">Offers: ${esc(item.offersErr)}</div>`;
+  if (!list) return "";
+  if (!list.length) return `<div class="note" style="margin-top:8px">No ${kind.toLowerCase()} offers. You'd be the only seller.</div>`;
+  const fba = list.filter(o => o.fba).slice(0, 4), mf = list.filter(o => !o.fba).slice(0, 4);
+  const row = o => `<button data-price="${o.price.toFixed(2)}" aria-pressed="${parseFloat(item.price) === o.price}">
+      <span class="tag ${o.fba ? "fba" : "mf"}">${o.fba ? "FBA" : "MF"}</span>
+      <span style="font-size:13px;color:var(--muted)">${esc(o.sub)}${o.bb ? " · buy box" : ""}</span>
+      <span class="num" style="font-weight:700">${money(o.price)}</span></button>`;
+  return `<div class="label" style="margin-top:12px">Lowest ${kind.toLowerCase()} offers · tap to use</div>
+    <div class="offers">${fba.map(row).join("")}${mf.map(row).join("")}</div>`;
+}
+
+function renderList(){
+  const m = $("#main");
+  let body = "";
+  if (item){
+    if (item.loading) body = `<div class="card"><span class="spin"></span> Looking up ${esc(item.code)}…</div>`;
+    else if (item.err) body = `<div class="result bad">${esc(item.err)}</div>`;
+    else {
+      const r = item.result;
+      body = `
+      <div class="card">
+        <div class="prod">
+          ${item.img ? `<img src="${esc(item.img)}" alt="">` : ""}
+          <div style="min-width:0">
+            <div class="t">${esc(item.title)}</div>
+            <div class="asin num">${esc(item.asin)}</div>
+            <div class="meta">Scanned ${esc(item.code)}</div>
+          </div>
+        </div>
+        ${item.matches.length > 1 ? `<div class="label" style="margin-top:10px">Other matches</div><div class="matches">${item.matches.map((x, i) => `<button data-m="${i}">${esc(x.title)}</button>`).join("")}</div>` : ""}
+        ${gateHTML()}
+      </div>
+      <div class="label" style="margin-top:14px">Condition</div>
+      <div class="seg wide" id="conds" style="margin-top:6px">${CONDS.map(c => `<button data-c="${c.id}" aria-pressed="${S.cond === c.id}">${c.short}</button>`).join("")}</div>
+      ${offersHTML()}
+      <div class="grid3">
+        <label class="field">Your price<input id="price" class="num" inputmode="decimal" value="${esc(item.price)}" placeholder="0.00"></label>
+        <label class="field">Buy cost<input id="cost" class="num" inputmode="decimal" value="${esc(item.cost)}" placeholder="0.00"></label>
+        ${S.channel === "mf" ? `<label class="field">Qty<input id="qty" class="num" inputmode="numeric" value="${esc(item.qty)}"></label>` : `<div></div>`}
+      </div>
+      <div class="money" id="money">${moneyHTML()}</div>
+      <div class="note" id="feesErr" style="margin-top:4px">${item.feesErr ? "Fees: " + esc(item.feesErr) : ""}</div>
+      <label class="field">Condition note<textarea id="note" maxlength="1000">${esc(item.note)}</textarea></label>
+      <div class="grid2">
+        <label class="field">SKU<input id="sku" class="num" maxlength="40" value="${esc(item.sku)}"></label>
+        ${S.channel === "mf"
+          ? `<div class="field">Ticket · shelf<div class="row"><span class="chip num">#${String(S.ticket).padStart(5, "0")}</span><input id="shelf" value="${esc(S.shelf)}" style="width:70px"></div></div>`
+          : `<div class="field">&nbsp;<button class="mini" id="newSku">New SKU</button></div>`}
+      </div>
+      ${item.gate === "bad" ? `<div class="note" style="margin-top:10px;color:var(--warn)">This item is restricted for you in this condition. Amazon will likely reject the listing until you're approved.</div>` : ""}
+      <button class="btn go" id="listBtn" ${item.busy ? "disabled" : ""}>${item.busy ? '<span class="spin"></span> LISTING…' : `LIST IT · ${S.channel.toUpperCase()}`}</button>
+      ${r ? (r.ok
+        ? `<div class="result ok">✓ Listed. SKU <span class="num">${esc(r.entry.sku)}</span>${r.entry.ticket ? ` · ticket #${String(r.entry.ticket).padStart(5, "0")} · shelf ${esc(r.entry.shelf)}` : ""}
+            <div class="note" style="margin-top:4px">Amazon accepted it. It shows in Manage Inventory within a few minutes.${S.channel === "fba" ? " Add it to a shipment in Send to Amazon." : ""}</div>
+            ${r.entry.warnings.length ? `<ul>${r.entry.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+            <div id="checkRes" style="color:var(--fg);margin-top:8px">${statusHTML(r.entry.status)}</div>
+            ${S.channel === "fba" ? `<button class="btn pri" id="printLbl" style="width:100%;margin-top:10px" ${r.entry.status && r.entry.status.fnsku ? "" : "disabled"}>${r.entry.status && r.entry.status.fnsku ? "Print label · " + esc(r.entry.status.fnsku) : '<span class="spin"></span> Waiting for FNSKU…'}</button>` : ""}
+            <div class="row" style="margin-top:10px">
+              <button class="btn pri" id="nextBtn" style="flex:1">Next item</button>
+              <button class="btn" id="checkNow" style="flex:1">Check on Amazon</button>
+              ${S.channel === "fba" ? `<a class="btn" style="flex:1;text-decoration:none" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/fba/sendtoamazon">Send to Amazon</a>` : ""}
+            </div></div>`
+        : `<div class="result bad">Amazon didn't accept it${r.status ? " (" + esc(r.status) + ")" : ""}.<ul>${r.msgs.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`) : ""}`;
+    }
+  } else {
+    body = `<div class="card note">Scan a barcode, type an ISBN/UPC/ASIN, or use a Bluetooth scanner. Coming from Scout? Tap <b>List it</b> on a result.</div>`;
+  }
+  m.innerHTML = `
+    <div class="top">
+      <h1>Bethany Lister</h1>
+      <div class="seg" id="chan"><button data-ch="fba" aria-pressed="${S.channel === "fba"}">FBA</button><button data-ch="mf" aria-pressed="${S.channel === "mf"}">MF</button></div>
+      <a class="chip" href="../">Scout</a>
+    </div>
+    <div class="scanrow">
+      <input id="code" inputmode="text" autocomplete="off" autocapitalize="characters" placeholder="ISBN, UPC or ASIN" value="${esc(item ? item.code : "")}" enterkeyhint="search">
+      <button class="btn pri" id="camBtn">Scan</button>
+      <button class="btn" id="goBtn">Go</button>
+    </div>
+    ${body}`;
+  wireList();
+}
+
+function wireList(){
+  const code = $("#code");
+  code.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); lookup(code.value); } };
+  $("#goBtn").onclick = () => lookup(code.value);
+  $("#camBtn").onclick = openCam;
+  document.querySelectorAll("#chan button").forEach(b => b.onclick = () => {
+    S.channel = b.dataset.ch; save();
+    if (item && !item.loading && !item.err){ item.sku = buildSku(); item.result = null; queueFees(); }
+    render();
+  });
+  if (!item || item.loading || item.err) return;
+  document.querySelectorAll("[data-m]").forEach(b => b.onclick = () => choose(+b.dataset.m));
+  document.querySelectorAll("#conds button").forEach(b => b.onclick = () => {
+    const was = S.notes[S.cond] || "";
+    S.cond = b.dataset.c; save();
+    if (!item.note.trim() || item.note === was) item.note = S.notes[S.cond] || "";
+    item.sku = buildSku(); item.result = null;
+    render(); loadGate(); loadOffers();
+  });
+  document.querySelectorAll("[data-price]").forEach(b => b.onclick = () => { item.price = b.dataset.price; render(); queueFees(); });
+  $("#price").oninput = e => { item.price = e.target.value; queueFees(); renderMoney(); };
+  $("#cost").oninput = e => { item.cost = e.target.value; renderMoney(); };
+  $("#cost").onchange = () => { if (/\{COST\}/.test(S.channel === "mf" ? S.skuMf : S.skuFba)){ item.sku = buildSku(); $("#sku").value = item.sku; } };
+  if ($("#qty")) $("#qty").oninput = e => item.qty = e.target.value;
+  $("#note").oninput = e => item.note = e.target.value;
+  $("#sku").oninput = e => item.sku = e.target.value.trim();
+  if ($("#newSku")) $("#newSku").onclick = () => { item.sku = buildSku(); $("#sku").value = item.sku; };
+  if ($("#shelf")) $("#shelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); item.sku = buildSku(); render(); };
+  $("#listBtn").onclick = listIt;
+  if ($("#nextBtn")) $("#nextBtn").onclick = () => { clearTimeout(fnPoll); item = null; render(); $("#code").focus(); };
+  if ($("#printLbl")) $("#printLbl").onclick = () => askAndPrint(S.listed.find(x => x.sku === item.result.entry.sku) || item.result.entry);
+  if ($("#checkNow")) $("#checkNow").onclick = async e => {
+    const btn = e.currentTarget, entry = S.listed.find(x => x.sku === item.result.entry.sku) || item.result.entry;
+    btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Checking';
+    await checkStatus(entry); item.result.entry = entry;
+    btn.disabled = false; btn.textContent = "Check on Amazon";
+    $("#checkRes").innerHTML = statusHTML(entry.status);
+    const pb = $("#printLbl"); if (pb && entry.status.fnsku){ pb.disabled = false; pb.textContent = "Print label · " + entry.status.fnsku; }
+  };
+}
+
+function renderListed(){
+  const q = (LS.get("q", "") || "").toLowerCase();
+  const rows = S.listed.filter(x => !q || [x.title, x.sku, x.asin, x.code, x.shelf, x.ticket].join(" ").toLowerCase().includes(q));
+  const total = rows.reduce((a, x) => a + x.price, 0);
+  $("#main").innerHTML = `
+    <h2>Listed (${S.listed.length})</h2>
+    <div class="row"><input id="q" placeholder="Search title, SKU, ticket, shelf" value="${esc(q)}"><button class="mini" id="csv">CSV</button></div>
+    <div class="note" style="margin-top:6px">${rows.length} items · ${money(total)} listed value</div>
+    <div class="note row" style="margin-top:4px;justify-content:space-between"><span>${syncLine()}</span><button class="mini" id="syncNow">Sync now</button></div>
+    <div class="list">${rows.map(x => `
+      <div class="item">
+        <div class="t">${esc(x.title)}</div>
+        <div class="m"><span class="tag ${x.channel === "fba" ? "fba" : "mf"}">${x.channel.toUpperCase()}</span>
+          ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)} · ${new Date(x.at).toLocaleDateString()}</div>
+        <div class="m num">${esc(x.sku)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")} · shelf ${esc(x.shelf)}` : ""}</div>
+        <div data-st="${esc(x.sku)}">${statusHTML(x.status)}</div>
+        <div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="mini" data-check="${esc(x.sku)}">Check on Amazon</button>
+        ${x.channel === "fba" ? `<button class="mini" data-print="${esc(x.sku)}">Print label</button>` : ""}
+        ${x.status && "price" in x.status && x.status.price == null ? `<button class="mini" data-fix="${esc(x.sku)}" style="border-color:var(--accent);color:var(--accent)">Resend price & ${x.channel === "fba" ? "FBA" : "MF"}</button>` : ""}</div>
+      </div>`).join("") || `<div class="note" style="margin-top:12px">Nothing listed yet.</div>`}</div>`;
+  $("#q").oninput = e => { LS.set("q", e.target.value); const p = e.target.selectionStart; renderListed(); const n = $("#q"); n.focus(); n.setSelectionRange(p, p); };
+  $("#csv").onclick = exportCsv;
+  $("#syncNow").onclick = e => { e.currentTarget.innerHTML = '<span class="spin"></span>'; sync(); };
+  document.querySelectorAll("[data-check]").forEach(b => b.onclick = async () => {
+    const entry = S.listed.find(x => x.sku === b.dataset.check); if (!entry) return;
+    b.disabled = true; b.innerHTML = '<span class="spin"></span> Checking';
+    await checkStatus(entry);
+    b.disabled = false; b.textContent = "Check on Amazon";
+    renderListed();
+  });
+  document.querySelectorAll("[data-print]").forEach(b => b.onclick = () => { const e = S.listed.find(x => x.sku === b.dataset.print); if (e) askAndPrint(e); });
+  document.querySelectorAll("[data-fix]").forEach(b => b.onclick = async () => {
+    const entry = S.listed.find(x => x.sku === b.dataset.fix); if (!entry) return;
+    b.disabled = true; b.innerHTML = '<span class="spin"></span> Sending';
+    await fixListing(entry);
+    b.disabled = false; b.textContent = "Resend price & " + (entry.channel === "fba" ? "FBA" : "MF");
+  });
+}
+function exportCsv(){
+  const cols = ["date","sku","asin","code","title","channel","condition","price","cost","ticket","shelf","amazon_status"];
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lines = [cols.join(",")].concat(S.listed.map(x => [new Date(x.at).toISOString(), x.sku, x.asin, x.code, x.title, x.channel, x.cond, x.price, x.cost, x.ticket, x.shelf, x.status ? x.status.label : ""].map(q).join(",")));
+  const blob = new Blob([lines.join("\n")], {type: "text/csv"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "bethany-listed.csv"; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function renderSettings(){
+  $("#main").innerHTML = `
+    <h2>Connection</h2>
+    <label class="field">Worker URL<input id="sWorker" value="${esc(S.worker)}" autocapitalize="off" autocomplete="off"></label>
+    <label class="field">App key (same as APP_KEY in Cloudflare)<input id="sKey" type="password" value="${esc(S.key)}" autocapitalize="off" autocomplete="off"></label>
+    <div class="row" style="margin-top:10px"><button class="btn pri" id="test" style="flex:1">Test connection</button></div>
+    <div class="note" id="testRes" style="margin-top:6px"></div>
+
+    <h2>SKU</h2>
+    <label class="field">FBA pattern<input id="sFba" class="num" value="${esc(S.skuFba)}"></label>
+    <label class="field">MF pattern<input id="sMf" class="num" value="${esc(S.skuMf)}"></label>
+    <div class="note" style="margin-top:6px">Codes: {DATE} {COND} {COST} {RAND} {TICKET} {SHELF}. Max 40 characters.</div>
+
+    <h2>MF tickets</h2>
+    <div class="grid2">
+      <label class="field">Next ticket #<input id="sTicket" class="num" inputmode="numeric" value="${S.ticket}"></label>
+      <label class="field">Current shelf<input id="sShelf" value="${esc(S.shelf)}"></label>
+    </div>
+    <div class="note" style="margin-top:6px">The ticket goes up by one after each MF listing and skips numbers you've already used.</div>
+
+    <h2>FNSKU labels</h2>
+    <label class="field">Label size<select id="sLabel">${Object.entries(LABELS).map(([k, v]) => `<option value="${k}" ${S.labelSize === k ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
+    <div class="lblprev" id="lblPrev" style="width:max-content"></div>
+    <div class="row" style="margin-top:10px"><button class="mini" id="testPrint">Print a test label</button></div>
+
+    <h2>Condition notes</h2>
+    ${CONDS.map(c => `<label class="field">${c.name}<textarea data-n="${c.id}" maxlength="1000">${esc(S.notes[c.id] || "")}</textarea></label>`).join("")}
+    <div class="row" style="margin-top:16px;flex-wrap:wrap">
+      <a class="chip" href="../">Open Scout</a>
+      <a class="chip" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/fba/sendtoamazon">Send to Amazon</a>
+      <a class="chip" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/myinventory/inventory">Manage Inventory</a>
+    </div>`;
+  $("#sWorker").onchange = e => { S.worker = e.target.value.trim(); save(); };
+  $("#sKey").onchange = e => { S.key = e.target.value.trim(); save(); };
+  $("#sFba").onchange = e => { S.skuFba = e.target.value.trim() || "{DATE}-{COND}-{COST}-{RAND}"; save(); };
+  $("#sMf").onchange = e => { S.skuMf = e.target.value.trim() || "MF{TICKET}-{COND}-{COST}"; save(); };
+  $("#sTicket").onchange = e => { const n = parseInt(e.target.value); if (n > 0){ S.ticket = n; save(); syncSoon(); if (ticketTaken(n)) toast("Ticket " + n + " was already used"); } };
+  $("#sShelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); };
+  document.querySelectorAll("[data-n]").forEach(t => t.onchange = e => { S.notes = {...S.notes, [t.dataset.n]: e.target.value}; save(); });
+  const sample = {title: "Yoga for the Body, Mind and Soul", cond: "very_good"};
+  const prev = () => { $("#lblPrev").innerHTML = labelHTML(sample, "X00TEST123"); };
+  prev();
+  $("#sLabel").onchange = e => { S.labelSize = e.target.value; save(); prev(); };
+  $("#testPrint").onclick = () => printLabels(sample, "X00TEST123", 1);
+  $("#test").onclick = async () => {
+    S.worker = $("#sWorker").value.trim(); S.key = $("#sKey").value.trim(); save();
+    const out = $("#testRes"); out.innerHTML = '<span class="spin"></span> Testing…';
+    try {
+      const d = await api("/lookup?code=9780307387899");
+      const t = d.items && d.items[0] && d.items[0].summaries && d.items[0].summaries[0] && d.items[0].summaries[0].itemName;
+      out.innerHTML = `<span class="pos">✓ Connected to Amazon.</span> Test book: ${esc(t || "found")}`;
+    } catch(e){ out.innerHTML = `<span class="neg">✗ ${esc(e.message)}</span>`; }
+  };
+}
+
+// ---------- start ----------
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { closeCam(); tab = b.dataset.tab; render(); if (tab === "listed") sync(); });
+// Bluetooth scanners type fast and press Enter; keep the box ready on the List tab
+document.addEventListener("keydown", e => {
+  if (tab !== "list") return;
+  const a = document.activeElement;
+  if (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) return;
+  if (/^[0-9A-Za-z]$/.test(e.key)){ const c = $("#code"); if (c){ c.value = ""; c.focus(); } }
+});
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+render();
+const start = new URLSearchParams(location.search).get("code");
+if (!S.key){ tab = "settings"; render(); toast("Enter your app key to connect"); }
+else if (start) lookup(start);
+if (S.key) sync();
+document.addEventListener("visibilitychange", () => { if (!document.hidden && S.key) sync(); });
+</script>
+</body>
+</html>

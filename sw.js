@@ -2,14 +2,14 @@
 // The app page: network first, so new versions show up right away; saved copy when there's no signal.
 // Libraries, fonts, icons: saved copy first (they never change at a pinned version).
 // Keepa, Amazon and Worker requests: never touched, always live.
-const CACHE = "scout-v2";
-const CORE = ["./", "./index.html", "./lister.html", "./manifest.json", "./icons/icon-180.png", "./icons/icon-192.png", "./icons/icon-512.png"];
+const CACHE = "scout-v3";
+const CORE = ["./", "./index.html", "./manifest.json", "./icons/icon-180.png", "./icons/icon-192.png", "./icons/icon-512.png"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(CORE)).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith("scout-") && k !== CACHE).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 self.addEventListener("fetch", e => {
@@ -17,9 +17,10 @@ self.addEventListener("fetch", e => {
   if (req.method !== "GET") return;
   if (/keepa\.com$|amazon\.com$|media-amazon\.com$|workers\.dev$/.test(url.hostname)) return;   // live data only
 
-  const isPage = req.mode === "navigate" || (url.origin === location.origin && /\/(index\.html|lister\.html)?$/.test(url.pathname));
+  if (url.pathname.includes("/lister")) return;   // the Lister has its own app and offline cache
+  const isPage = req.mode === "navigate" || (url.origin === location.origin && /\/(index\.html)?$/.test(url.pathname));
   if (isPage){
-    const page = /lister\.html$/.test(url.pathname) ? "./lister.html" : "./index.html";   // each page keeps its own saved copy
+    const page = "./index.html";
     e.respondWith(
       fetch(req, {cache: "no-store"}).then(res => {
         const copy = res.clone(); caches.open(CACHE).then(c => c.put(page, copy)); return res;
