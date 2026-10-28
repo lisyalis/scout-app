@@ -203,8 +203,11 @@ const S = {
   chartAuto: LS.get("chartAuto", false),
   chartRange: LS.get("chartRange", 180),
   noteChips: LS.get("noteChips", DEF_CHIPS),
+  source: LS.get("source", ""),
+  sources: LS.get("sources", []),
 };
-function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays","statsScope","chartAuto","chartRange","noteChips"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays","statsScope","chartAuto","chartRange","noteChips","source","sources"]) LS.set(k, S[k]); }
+function rememberSource(src){ if (!src) return; S.sources = [src].concat(S.sources.filter(x => x.toLowerCase() !== src.toLowerCase())).slice(0, 12); save(); }
 // Keepa key is shared with Scout (same site, stored by Scout as scout.key)
 const keepaKey = () => { try { return JSON.parse(localStorage.getItem("scout.key")) || ""; } catch(e){ return ""; } };
 const live = () => S.listed.filter(x => !x.deleted);
@@ -237,7 +240,7 @@ let item = null;   // {code, asin, title, img, matches:[], cost, price, gate, ga
 let feeTimer = null;
 
 function blankItem(code){
-  return {code, asin:null, title:"", img:"", matches:[], cost:"", price:"", note:S.notes[S.cond] || "", qty:1,
+  return {code, asin:null, title:"", img:"", matches:[], cost:"", price:"", note:S.notes[S.cond] || "", qty:1, source:S.source,
     loading:true, err:null, gate:null, gateMsg:"", gateLink:"", offers:{}, offersErr:null, fees:null, feesErr:null,
     sku:"", result:null, busy:false};
 }
@@ -354,6 +357,7 @@ function buildSku(){
     .replace(/\{RAND\}/g, rand)
     .replace(/\{TICKET\}/g, String(S.ticket).padStart(5, "0"))
     .replace(/\{SHELF\}/g, S.shelf)
+    .replace(/\{SRC\}/g, ((item && item.source) || S.source || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))
     .replace(/\s+/g, "").slice(0, 40);
 }
 function ticketTaken(n){ return S.listed.some(x => x.channel === "mf" && x.ticket === n) || S.batch.some(x => x.channel === "mf" && x.ticket === n && x.state !== "listed"); }
@@ -363,7 +367,7 @@ function nextTicket(){ do { S.ticket++; } while (ticketTaken(S.ticket)); }
 function snapshot(){
   return {code: item.code, asin: item.asin, title: item.title, img: item.img || "", productType: item.productType || null,
     cond: S.cond, channel: S.channel, price: parseFloat(item.price), cost: parseFloat(item.cost) || 0, note: (item.note || "").trim(),
-    qty: S.channel === "mf" ? (parseInt(item.qty) || 1) : undefined, sku: item.sku, rank: item.rank || null,
+    qty: Math.max(1, parseInt(item.qty) || 1), source: (item.source || "").trim(), sku: item.sku, rank: item.rank || null,
     fees: item.fees != null && item.feesFor === parseFloat(item.price) ? item.fees : null,
     ticket: S.channel === "mf" ? S.ticket : null, shelf: S.channel === "mf" ? S.shelf : null};
 }
@@ -383,9 +387,9 @@ async function listOne(sn){
     const errs = (d.issues || []).filter(i => i.severity === "ERROR");
     if (d.status === "ACCEPTED" && !errs.length){
       const entry = {at: Date.now(), sku: sn.sku, asin: sn.asin, productType: sn.productType, code: sn.code, title: sn.title,
-        cond: sn.cond, channel: sn.channel, price: sn.price, cost: sn.cost, note: sn.note, rank: sn.rank, fees: sn.fees, qty: sn.qty || 1,
+        cond: sn.cond, channel: sn.channel, price: sn.price, cost: sn.cost, note: sn.note, rank: sn.rank, fees: sn.fees, qty: sn.qty || 1, source: sn.source || "",
         ticket: sn.ticket, shelf: sn.shelf, warnings: (d.issues || []).map(i => i.message)};
-      S.listed.unshift(entry); save(); syncSoon(); setTimeout(refreshStats, 0);
+      S.listed.unshift(entry); rememberSource(entry.source); save(); syncSoon(); setTimeout(refreshStats, 0);
       watch(entry);
       return {ok: true, entry};
     }
@@ -919,10 +923,12 @@ function renderList(){
       <div class="label" style="margin-top:14px">Condition</div>
       <div class="seg wide" id="conds" style="margin-top:6px">${CONDS.map(c => `<button data-c="${c.id}" aria-pressed="${S.cond === c.id}">${c.short}</button>`).join("")}</div>
       ${offersHTML()}
-      <div class="grid3">
-        <label class="field">Your price<input id="price" class="num" inputmode="decimal" value="${esc(item.price)}" placeholder="0.00"></label>
+      <label class="field" style="margin-top:10px">Your price<input id="price" class="num" inputmode="decimal" value="${esc(item.price)}" placeholder="0.00"></label>
+      <div class="grid3" style="grid-template-columns:1fr 1.4fr .7fr">
         <label class="field">Buy cost<input id="cost" class="num" inputmode="decimal" value="${esc(item.cost)}" placeholder="0.00"></label>
-        ${S.channel === "mf" ? `<label class="field">Qty<input id="qty" class="num" inputmode="numeric" value="${esc(item.qty)}"></label>` : `<div></div>`}
+        <label class="field">Source<input id="source" list="srcList" value="${esc(item.source)}" placeholder="Goodwill, library sale…" autocomplete="off">
+          <datalist id="srcList">${S.sources.map(x => `<option value="${esc(x)}">`).join("")}</datalist></label>
+        <label class="field">Qty<input id="qty" class="num" inputmode="numeric" value="${esc(item.qty)}"></label>
       </div>
       <div class="money" id="money">${moneyHTML()}</div>
       <div class="note" id="feesErr" style="margin-top:4px">${item.feesErr ? "Fees: " + esc(item.feesErr) : ""}</div>
@@ -996,7 +1002,9 @@ function wireList(){
   $("#price").oninput = e => { item.price = e.target.value; queueFees(); renderMoney(); };
   $("#cost").oninput = e => { item.cost = e.target.value; renderMoney(); };
   $("#cost").onchange = () => { if (/\{COST\}/.test(S.channel === "mf" ? S.skuMf : S.skuFba)){ item.sku = buildSku(); $("#sku").value = item.sku; } };
-  if ($("#qty")) $("#qty").oninput = e => item.qty = e.target.value;
+  if ($("#qty")) $("#qty").oninput = e => { item.qty = e.target.value; renderMoney(); };
+  $("#source").oninput = e => { item.source = e.target.value; };
+  $("#source").onchange = e => { S.source = e.target.value.trim(); save(); if (/\{SRC\}/.test(S.channel === "mf" ? S.skuMf : S.skuFba)){ item.sku = buildSku(); $("#sku").value = item.sku; } };
   $("#note").oninput = e => { item.note = e.target.value; markChips(); };
   document.querySelectorAll("[data-tpl]").forEach(b => b.onclick = () => {
     // keep any add-on details already in the note, swap only the main sentence
@@ -1031,14 +1039,14 @@ const scLink = x => `https://sellercentral.amazon.com/myinventory/inventory?sear
 function renderListed(){
   const q = (LS.get("q", "") || "").toLowerCase();
   const all = live();
-  const rows = all.filter(x => !q || [x.title, x.sku, x.asin, x.code, x.shelf, x.ticket].join(" ").toLowerCase().includes(q));
+  const rows = all.filter(x => !q || [x.title, x.sku, x.asin, x.code, x.shelf, x.ticket, x.source].join(" ").toLowerCase().includes(q));
   const total = rows.reduce((a, x) => a + x.price, 0);
   const today = new Date().toDateString();
   const todays = all.filter(x => new Date(x.at).toDateString() === today);
   const todayReady = todays.filter(x => x.channel === "mf" || (x.status && x.status.fnsku)).length;
   $("#main").innerHTML = `
     <h2>Listed (${all.length})</h2>
-    <div class="row"><input id="q" placeholder="Search title, SKU, ticket, shelf" value="${esc(q)}"><button class="mini" id="csv">CSV</button></div>
+    <div class="row"><input id="q" placeholder="Search title, SKU, source, ticket, shelf" value="${esc(q)}"><button class="mini" id="csv">CSV</button></div>
     <div class="note" style="margin-top:6px">${rows.length} items · ${money(total)} listed value</div>
     <div class="note row" style="margin-top:4px;justify-content:space-between"><span>${syncLine()}</span><button class="mini" id="syncNow">Sync now</button></div>
     ${todays.length ? `<button class="btn" id="printToday" style="width:100%;margin-top:10px" ${todayReady ? "" : "disabled"}>Print today's labels & tickets (${todayReady} of ${todays.length} ready)</button>` : ""}
@@ -1046,7 +1054,7 @@ function renderListed(){
       <div class="item">
         <div class="t">${esc(x.title)}</div>
         <div class="m"><span class="tag ${x.channel === "fba" ? "fba" : "mf"}">${x.channel.toUpperCase()}</span>
-          ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)} · ${new Date(x.at).toLocaleDateString()}${x.soldAt ? ' · <b class="pos">SOLD</b>' : x.shippedAt ? ' · <b style="color:var(--blue)">SHIPPED</b>' : ""}</div>
+          ${condOf(x.cond).short} · ${money(x.price)}${(x.qty || 1) > 1 ? ` ×${x.qty}` : ""} · cost ${money(x.cost)}${x.source ? ` · ${esc(x.source)}` : ""} · ${new Date(x.at).toLocaleDateString()}${x.soldAt ? ' · <b class="pos">SOLD</b>' : x.shippedAt ? ' · <b style="color:var(--blue)">SHIPPED</b>' : ""}</div>
         <div class="m num">${esc(x.sku)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")} · shelf ${esc(x.shelf)}` : ""}</div>
         <div data-st="${esc(x.sku)}">${statusHTML(x.status)}</div>
         ${editing === x.sku ? `
@@ -1054,6 +1062,7 @@ function renderListed(){
             <label class="field">Price<input id="ePrice" class="num" inputmode="decimal" value="${x.price.toFixed(2)}"></label>
             <label class="field">Buy cost (only saved here)<input id="eCost" class="num" inputmode="decimal" value="${(x.cost || 0).toFixed(2)}"></label>
           </div>
+          <label class="field">Source (only saved here)<input id="eSrc" value="${esc(x.source || "")}" list="srcList2"><datalist id="srcList2">${S.sources.map(v => `<option value="${esc(v)}">`).join("")}</datalist></label>
           <label class="field">Condition note<textarea id="eNote" maxlength="1000">${esc(x.note || "")}</textarea></label>
           <div class="row" style="margin-top:8px"><button class="btn pri" id="eSave" style="flex:1">Save to Amazon</button><button class="btn" id="eCancel" style="flex:1">Cancel</button></div>`
         : `<div class="row" style="margin-top:8px;flex-wrap:wrap">
@@ -1084,6 +1093,8 @@ function renderListed(){
     if (!(price > 0)){ toast("Enter a price"); return; }
     // cost never goes to Amazon: save it right away
     if (!isNaN(cost) && cost >= 0 && cost !== (entry.cost || 0)){ entry.cost = cost; entry.editedAt = Date.now(); save(); syncSoon(); }
+    const src = $("#eSrc").value.trim();
+    if (src !== (entry.source || "")){ entry.source = src; entry.editedAt = Date.now(); rememberSource(src); save(); syncSoon(); }
     const body = {sku: entry.sku, productType: entry.productType || undefined};
     if (price !== entry.price) body.price = price;
     if (note !== (entry.note || "")) body.note = note;
@@ -1126,9 +1137,9 @@ function renderListed(){
   });
 }
 function exportCsv(){
-  const cols = ["date","sku","asin","code","title","channel","condition","price","cost","ticket","shelf","amazon_status"];
+  const cols = ["date","sku","asin","code","title","channel","condition","price","cost","qty","source","ticket","shelf","amazon_status"];
   const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const lines = [cols.join(",")].concat(live().map(x => [new Date(x.at).toISOString(), x.sku, x.asin, x.code, x.title, x.channel, x.cond, x.price, x.cost, x.ticket, x.shelf, x.status ? x.status.label : ""].map(q).join(",")));
+  const lines = [cols.join(",")].concat(live().map(x => [new Date(x.at).toISOString(), x.sku, x.asin, x.code, x.title, x.channel, x.cond, x.price, x.cost, x.qty || 1, x.source || "", x.ticket, x.shelf, x.status ? x.status.label : ""].map(q).join(",")));
   const blob = new Blob([lines.join("\n")], {type: "text/csv"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "bethany-listed.csv"; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
@@ -1149,7 +1160,7 @@ function renderSettings(){
     <h2>SKU</h2>
     <label class="field">FBA pattern<input id="sFba" class="num" value="${esc(S.skuFba)}"></label>
     <label class="field">MF pattern<input id="sMf" class="num" value="${esc(S.skuMf)}"></label>
-    <div class="note" style="margin-top:6px">Codes: {DATE} {COND} {COST} {RAND} {TICKET} {SHELF}. Max 40 characters.</div>
+    <div class="note" style="margin-top:6px">Codes: {DATE} {COND} {COST} {RAND} {TICKET} {SHELF} {SRC}. Max 40 characters.</div>
 
     <h2>MF tickets</h2>
     <div class="grid2">
@@ -1270,7 +1281,7 @@ async function runShipment(){
         destinationMarketplaces: [MKT],
         sourceAddress: {name: f.name, addressLine1: f.address1, ...(f.address2 ? {addressLine2: f.address2} : {}), city: f.city,
           stateOrProvinceCode: f.state.toUpperCase(), postalCode: f.zip, countryCode: "US", phoneNumber: f.phone},
-        items: sh.skus.map(msku => ({msku, quantity: 1, prepOwner: "NONE", labelOwner: "SELLER"})),
+        items: sh.skus.map(msku => ({msku, quantity: (S.listed.find(x => x.sku === msku) || {}).qty || 1, prepOwner: "NONE", labelOwner: "SELLER"})),
       });
       sh.planId = r.inboundPlanId; save();
       await waitOp(r);
