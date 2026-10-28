@@ -108,6 +108,12 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
 @keyframes sp{to{transform:rotate(360deg)}}
 #labelSheet{display:none}
+.stats6{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 8px 10px;text-align:center;border-bottom:3px solid var(--bar)}
+.stat .k{font-size:12px;color:var(--fg);font-weight:600;white-space:nowrap}
+.stat .v{font:700 17px/1.2 var(--mono);margin-top:4px}
+@media (min-width:700px){.stats6{grid-template-columns:repeat(6,1fr)}}
+.kchart{width:100%;border-radius:10px;background:#fff;display:block;min-height:120px}
 .lblprev{background:#fff;color:#000;border-radius:6px;margin:10px auto 0;box-shadow:0 2px 10px rgba(0,0,0,.5);overflow:hidden}
 .lbl{box-sizing:border-box;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column;justify-content:center;align-items:center;overflow:hidden}
 .lbl svg{display:block;width:100%;height:100%}
@@ -179,8 +185,13 @@ const S = {
   ship: LS.get("ship", null),
   orders: LS.get("orders", {}),
   salesDays: LS.get("salesDays", 30),
+  statsScope: LS.get("statsScope", "today"),
+  chartAuto: LS.get("chartAuto", false),
+  chartRange: LS.get("chartRange", 180),
 };
-function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays","statsScope","chartAuto","chartRange"]) LS.set(k, S[k]); }
+// Keepa key is shared with Scout (same site, stored by Scout as scout.key)
+const keepaKey = () => { try { return JSON.parse(localStorage.getItem("scout.key")) || ""; } catch(e){ return ""; } };
 const live = () => S.listed.filter(x => !x.deleted);
 
 // ---------- helpers ----------
@@ -236,7 +247,8 @@ async function lookup(raw){
         asin: x.asin,
         title: (x.summaries && x.summaries[0] && x.summaries[0].itemName) || x.asin,
         img: (x.images && x.images[0] && x.images[0].images && x.images[0].images[0] && x.images[0].images[0].link) || "",
-        productType: (x.productTypes && x.productTypes[0] && x.productTypes[0].productType) || null
+        productType: (x.productTypes && x.productTypes[0] && x.productTypes[0].productType) || null,
+        rank: (() => { const r = (x.salesRanks || [])[0] || {}; const d = (r.displayGroupRanks || [])[0] || (r.classificationRanks || [])[0]; return d ? d.rank : null; })()
       }));
       if (!items.length) throw new Error("No Amazon listing found for " + code + ".");
       item.matches = items;
@@ -336,7 +348,8 @@ function nextTicket(){ do { S.ticket++; } while (ticketTaken(S.ticket)); }
 function snapshot(){
   return {code: item.code, asin: item.asin, title: item.title, img: item.img || "", productType: item.productType || null,
     cond: S.cond, channel: S.channel, price: parseFloat(item.price), cost: parseFloat(item.cost) || 0, note: (item.note || "").trim(),
-    qty: S.channel === "mf" ? (parseInt(item.qty) || 1) : undefined, sku: item.sku,
+    qty: S.channel === "mf" ? (parseInt(item.qty) || 1) : undefined, sku: item.sku, rank: item.rank || null,
+    fees: item.fees != null && item.feesFor === parseFloat(item.price) ? item.fees : null,
     ticket: S.channel === "mf" ? S.ticket : null, shelf: S.channel === "mf" ? S.shelf : null};
 }
 function checkSnap(sn){
@@ -355,9 +368,9 @@ async function listOne(sn){
     const errs = (d.issues || []).filter(i => i.severity === "ERROR");
     if (d.status === "ACCEPTED" && !errs.length){
       const entry = {at: Date.now(), sku: sn.sku, asin: sn.asin, productType: sn.productType, code: sn.code, title: sn.title,
-        cond: sn.cond, channel: sn.channel, price: sn.price, cost: sn.cost, note: sn.note,
+        cond: sn.cond, channel: sn.channel, price: sn.price, cost: sn.cost, note: sn.note, rank: sn.rank, fees: sn.fees, qty: sn.qty || 1,
         ticket: sn.ticket, shelf: sn.shelf, warnings: (d.issues || []).map(i => i.message)};
-      S.listed.unshift(entry); save(); syncSoon();
+      S.listed.unshift(entry); save(); syncSoon(); setTimeout(refreshStats, 0);
       watch(entry);
       return {ok: true, entry};
     }
@@ -432,7 +445,7 @@ function renderBatch(){
   if (!p){ if (tab === "list") renderSoon(); return; }
   const html = batchHTML();
   if (!html){ p.remove(); return; }
-  p.outerHTML = html; wireBatch();
+  p.outerHTML = html; wireBatch(); refreshStats();
 }
 function wireBatch(){
   if (!$("#batchPanel")) return;
@@ -733,6 +746,65 @@ $("#torchBtn").onclick = async () => {
   $("#torchBtn").textContent = torchOn ? "Light off" : "Light";
 };
 
+// ---------- stats bar (Items · SKUs · Avg rank · Sales value · Cost · Profit) ----------
+function statsRows(){
+  if (S.statsScope === "batch") return S.batch.map(x => x.state === "listed" ? (S.listed.find(e => e.sku === x.sku) || x) : x);
+  if (S.statsScope === "all") return live().filter(x => !x.soldAt);
+  const today = new Date().toDateString();
+  return live().filter(x => new Date(x.at).toDateString() === today);
+}
+const kfmt = n => n == null ? "—" : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(Math.round(n));
+function statsHTML(){
+  const rows = statsRows();
+  const units = rows.reduce((a, x) => a + (x.qty || 1), 0);
+  const ranks = rows.map(x => x.rank).filter(r => r > 0);
+  const avgRank = ranks.length ? ranks.reduce((a, r) => a + r, 0) / ranks.length : null;
+  const value = rows.reduce((a, x) => a + (x.price || 0) * (x.qty || 1), 0);
+  const cost = rows.reduce((a, x) => a + (x.cost || 0) * (x.qty || 1), 0);
+  const withFees = rows.filter(x => x.fees != null);
+  const profit = withFees.reduce((a, x) => a + ((x.price || 0) - x.fees - (x.cost || 0)) * (x.qty || 1), 0);
+  const tile = (icon, label, val, color, cls) => `<div class="stat" style="--bar:${color}"><div class="k">${icon} ${label}</div><div class="v num ${cls || ""}">${val}</div></div>`;
+  return `<div id="statsBar">
+    <div class="row" style="justify-content:space-between;margin-top:10px">
+      <div class="seg" id="scope">${[["today","Today"],["batch","Batch"],["all","All active"]].map(([k, l]) => `<button data-scope="${k}" aria-pressed="${S.statsScope === k}">${l}</button>`).join("")}</div>
+    </div>
+    <div class="stats6">
+      ${tile("▦", "Items", units, "#8d98a4")}
+      ${tile("▤", "SKUs", rows.length, "#38bdf8")}
+      ${tile("↗", "Avg rank", kfmt(avgRank), "#2b8fc9")}
+      ${tile("◇", "Sales value", money(value), "#6b7280")}
+      ${tile("⊖", "Cost", money(cost), "#e5534b")}
+      ${tile("$", "Profit", withFees.length ? money(profit) : "—", "#22c55e", profit >= 0 ? "pos" : "neg")}
+    </div>
+    ${rows.length && withFees.length < rows.length ? `<div class="note" style="margin-top:4px">Profit counts ${withFees.length} of ${rows.length} books (the rest had no fee estimate).</div>` : ""}
+  </div>`;
+}
+function wireStats(){
+  document.querySelectorAll("[data-scope]").forEach(b => b.onclick = () => { S.statsScope = b.dataset.scope; save(); refreshStats(); });
+}
+function refreshStats(){ const el = $("#statsBar"); if (el){ el.outerHTML = statsHTML(); wireStats(); } }
+
+// ---------- Keepa chart ----------
+function chartUrl(asin){
+  const w = Math.min(1000, Math.round((document.body.clientWidth || 390) * 2)), h = Math.round(w * 0.5);
+  return `https://api.keepa.com/graphimage?key=${encodeURIComponent(keepaKey())}&domain=1&asin=${encodeURIComponent(asin)}&amazon=1&new=1&used=1&salesrank=1&bb=1&fba=1&range=${S.chartRange}&width=${w}&height=${h}`;
+}
+function chartHTML(){
+  if (!item || !item.asin) return "";
+  if (!keepaKey()) return `<div class="note" style="margin-top:10px">Add your Keepa key in Settings to see the Keepa chart.</div>`;
+  const ranges = `<div class="seg" id="chartRange">${[30, 90, 180, 365].map(r => `<button data-range="${r}" aria-pressed="${S.chartRange === r}">${r === 365 ? "1Y" : r + "D"}</button>`).join("")}</div>`;
+  if (!item.chartOn && !S.chartAuto) return `<div class="row" style="margin-top:10px;justify-content:space-between"><button class="mini" id="chartBtn">📈 Keepa chart (1 token)</button>${ranges}</div>`;
+  return `<div style="margin-top:10px"><div class="row" style="justify-content:space-between;margin-bottom:6px"><span class="label">Keepa · ${S.chartRange === 365 ? "1 year" : S.chartRange + " days"}</span>${ranges}</div>
+    <img id="chartImg" class="kchart" src="${esc(chartUrl(item.asin))}" alt="Keepa price and rank history">
+    <div class="note" style="margin-top:4px">Green = sales rank · black = used · blue = new · pink = buy box · orange = FBA</div></div>`;
+}
+function wireChart(){
+  if ($("#chartBtn")) $("#chartBtn").onclick = () => { item.chartOn = true; render(); };
+  document.querySelectorAll("[data-range]").forEach(b => b.onclick = () => { S.chartRange = +b.dataset.range; save(); if (item) item.chartOn = true; render(); });
+  const img = $("#chartImg");
+  if (img) img.onerror = () => { img.replaceWith(Object.assign(document.createElement("div"), {className: "note", textContent: "Keepa chart didn't load (out of tokens or wrong key)."})); };
+}
+
 // ---------- render ----------
 let soon = 0;
 function renderSoon(){ cancelAnimationFrame(soon); soon = requestAnimationFrame(render); }
@@ -804,11 +876,12 @@ function renderList(){
           <div style="min-width:0">
             <div class="t">${esc(item.title)}</div>
             <div class="asin num">${esc(item.asin)}</div>
-            <div class="meta">Scanned ${esc(item.code)}</div>
+            <div class="meta">Scanned ${esc(item.code)}${item.rank ? ` · Rank <b class="num">${kfmt(item.rank)}</b>` : ""}</div>
           </div>
         </div>
         ${item.matches.length > 1 ? `<div class="label" style="margin-top:10px">Other matches</div><div class="matches">${item.matches.map((x, i) => `<button data-m="${i}">${esc(x.title)}</button>`).join("")}</div>` : ""}
         ${gateHTML()}
+        ${chartHTML()}
       </div>
       <div class="label" style="margin-top:14px">Condition</div>
       <div class="seg wide" id="conds" style="margin-top:6px">${CONDS.map(c => `<button data-c="${c.id}" aria-pressed="${S.cond === c.id}">${c.short}</button>`).join("")}</div>
@@ -848,7 +921,7 @@ function renderList(){
   } else {
     body = `<div class="card note">Scan a barcode, type an ISBN/UPC/ASIN, or use a Bluetooth scanner. Coming from Scout? Tap <b>List it</b> on a result.${S.batchMode ? "<br><b>Batch is on:</b> each book goes into the batch, then List all at once." : ""}</div>`;
   }
-  body = batchHTML() + body;
+  body = statsHTML() + batchHTML() + body;
   m.innerHTML = `
     <div class="top">
       <h1>Bethany Lister</h1>
@@ -870,7 +943,7 @@ function wireList(){
   $("#goBtn").onclick = () => lookup(code.value);
   $("#camBtn").onclick = openCam;
   $("#batchTog").onclick = () => { S.batchMode = !S.batchMode; save(); toast(S.batchMode ? "Batch on: scan, add, then List all" : "Batch off: list one at a time"); render(); };
-  wireBatch();
+  wireBatch(); wireStats(); wireChart();
   document.querySelectorAll("#chan button").forEach(b => b.onclick = () => {
     S.channel = b.dataset.ch; save();
     if (item && !item.loading && !item.err){ item.sku = buildSku(); item.result = null; queueFees(); }
@@ -1021,6 +1094,10 @@ function renderSettings(){
     <div class="row" style="margin-top:10px"><button class="btn pri" id="test" style="flex:1">Test connection</button></div>
     <div class="note" id="testRes" style="margin-top:6px"></div>
 
+    <h2>Keepa</h2>
+    <label class="field">Keepa API key (shared with Scout)<input id="sKeepa" type="password" value="${esc(keepaKey())}" autocapitalize="off" autocomplete="off"></label>
+    <label class="row" style="margin-top:10px;gap:10px"><input type="checkbox" id="sChart" ${S.chartAuto ? "checked" : ""} style="width:22px;height:22px;flex:none"><span>Show the Keepa chart on every scan <span class="note">(about 1 token each; off = tap to load)</span></span></label>
+
     <h2>SKU</h2>
     <label class="field">FBA pattern<input id="sFba" class="num" value="${esc(S.skuFba)}"></label>
     <label class="field">MF pattern<input id="sMf" class="num" value="${esc(S.skuMf)}"></label>
@@ -1063,6 +1140,8 @@ function renderSettings(){
     </div>`;
   $("#sWorker").onchange = e => { S.worker = e.target.value.trim(); save(); };
   $("#sKey").onchange = e => { S.key = e.target.value.trim(); save(); };
+  $("#sKeepa").onchange = e => { try { localStorage.setItem("scout.key", JSON.stringify(e.target.value.trim())); } catch(err){} };
+  $("#sChart").onchange = e => { S.chartAuto = e.target.checked; save(); };
   $("#sFba").onchange = e => { S.skuFba = e.target.value.trim() || "{DATE}-{COND}-{COST}-{RAND}"; save(); };
   $("#sMf").onchange = e => { S.skuMf = e.target.value.trim() || "MF{TICKET}-{COND}-{COST}"; save(); };
   $("#sTicket").onchange = e => { const n = parseInt(e.target.value); if (n > 0){ S.ticket = n; save(); syncSoon(); if (ticketTaken(n)) toast("Ticket " + n + " was already used"); } };
