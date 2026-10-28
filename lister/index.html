@@ -113,6 +113,11 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .stat .k{font-size:12px;color:var(--fg);font-weight:600;white-space:nowrap}
 .stat .v{font:700 17px/1.2 var(--mono);margin-top:4px}
 @media (min-width:700px){.stats6{grid-template-columns:repeat(6,1fr)}}
+.notes{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.notes button{text-align:left;font-size:13px;padding:8px 10px;border-radius:9px;border:1px solid var(--line);background:var(--panel2)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chips button{font-size:12.5px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:var(--panel2)}
+.notes button[aria-pressed="true"],.chips button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:rgba(245,166,35,.1)}
 .kchart{width:100%;border-radius:10px;background:#fff;display:block;min-height:120px}
 .lblprev{background:#fff;color:#000;border-radius:6px;margin:10px auto 0;box-shadow:0 2px 10px rgba(0,0,0,.5);overflow:hidden}
 .lbl{box-sizing:border-box;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column;justify-content:center;align-items:center;overflow:hidden}
@@ -165,6 +170,15 @@ const DEF_NOTES = {
   good: "Good. Visible wear on cover and edges. Pages intact and readable.",
   acceptable: "Acceptable. Heavy wear, may have markings or highlighting. All pages present."
 };
+// Ready-made note choices per condition (tap to use), and add-on details (tap to add/remove)
+const NOTE_TEMPLATES = {
+  new: ["Brand new, unread copy.", "New, never read. May have minor shelf wear from storage.", "Brand new in original condition. Clean and crisp."],
+  like_new: ["Like new. Clean pages, tight binding, no markings.", "Like new, appears unread. Crisp pages and cover.", "Like new with minimal shelf wear. No writing or highlighting."],
+  very_good: ["Very good. Light shelf wear on cover. Pages clean, no markings.", "Very good. Minor wear to cover edges. Clean, unmarked pages.", "Very good. Light rubbing on cover. Binding tight, pages clean."],
+  good: ["Good. Visible wear on cover and edges. Pages intact and readable.", "Good. Moderate wear to cover and corners. Pages clean and intact.", "Good. Some creasing and edge wear. May have light markings."],
+  acceptable: ["Acceptable. Heavy wear, may have markings or highlighting. All pages present.", "Acceptable. Well-read copy with heavy wear. Readable, all pages intact.", "Acceptable. Significant wear and writing or highlighting. Complete text."],
+};
+const DEF_CHIPS = ["Ex-library with usual stamps and stickers.", "Some highlighting or underlining.", "Name written inside cover.", "Dust jacket not included.", "Remainder mark on page edge.", "Access code or CD not included.", "Cover has a crease.", "Light water stain, text not affected.", "Fulfilled by Amazon: fast shipping."];
 const S = {
   worker: LS.get("worker", "https://bethanylister.wickedgoodproducts.workers.dev"),
   key: LS.get("key", ""),
@@ -188,8 +202,9 @@ const S = {
   statsScope: LS.get("statsScope", "today"),
   chartAuto: LS.get("chartAuto", false),
   chartRange: LS.get("chartRange", 180),
+  noteChips: LS.get("noteChips", DEF_CHIPS),
 };
-function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays","statsScope","chartAuto","chartRange"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays","statsScope","chartAuto","chartRange","noteChips"]) LS.set(k, S[k]); }
 // Keepa key is shared with Scout (same site, stored by Scout as scout.key)
 const keepaKey = () => { try { return JSON.parse(localStorage.getItem("scout.key")) || ""; } catch(e){ return ""; } };
 const live = () => S.listed.filter(x => !x.deleted);
@@ -805,6 +820,24 @@ function wireChart(){
   if (img) img.onerror = () => { img.replaceWith(Object.assign(document.createElement("div"), {className: "note", textContent: "Keepa chart didn't load (out of tokens or wrong key)."})); };
 }
 
+// ---------- condition note options ----------
+function noteTemplates(){
+  const mine = S.notes[S.cond];
+  const list = NOTE_TEMPLATES[S.cond] || [];
+  return mine && !list.includes(mine) ? [mine].concat(list) : list;
+}
+function noteOptionsHTML(){
+  const tpls = noteTemplates();
+  return `<div class="label" style="margin-top:8px">Pick a note · ${esc(condOf(S.cond).name)}</div>
+    <div class="notes">${tpls.map((t, i) => `<button data-tpl="${i}" aria-pressed="${item.note.startsWith(t)}">${esc(t)}</button>`).join("")}</div>
+    <div class="label" style="margin-top:8px">Add details</div>
+    <div class="chips">${S.noteChips.map((c, i) => `<button data-chip="${i}" aria-pressed="${item.note.includes(c)}">${esc(c.replace(/\.$/, ""))}</button>`).join("")}</div>`;
+}
+function markChips(){
+  document.querySelectorAll("[data-chip]").forEach(b => b.setAttribute("aria-pressed", String(item.note.includes(S.noteChips[+b.dataset.chip]))));
+  const t = noteTemplates(); document.querySelectorAll("[data-tpl]").forEach(b => b.setAttribute("aria-pressed", String(item.note.startsWith(t[+b.dataset.tpl]))));
+}
+
 // ---------- render ----------
 let soon = 0;
 function renderSoon(){ cancelAnimationFrame(soon); soon = requestAnimationFrame(render); }
@@ -894,6 +927,7 @@ function renderList(){
       <div class="money" id="money">${moneyHTML()}</div>
       <div class="note" id="feesErr" style="margin-top:4px">${item.feesErr ? "Fees: " + esc(item.feesErr) : ""}</div>
       <label class="field">Condition note<textarea id="note" maxlength="1000">${esc(item.note)}</textarea></label>
+      ${noteOptionsHTML()}
       <div class="grid2">
         <label class="field">SKU<input id="sku" class="num" maxlength="40" value="${esc(item.sku)}"></label>
         ${S.channel === "mf"
@@ -963,7 +997,18 @@ function wireList(){
   $("#cost").oninput = e => { item.cost = e.target.value; renderMoney(); };
   $("#cost").onchange = () => { if (/\{COST\}/.test(S.channel === "mf" ? S.skuMf : S.skuFba)){ item.sku = buildSku(); $("#sku").value = item.sku; } };
   if ($("#qty")) $("#qty").oninput = e => item.qty = e.target.value;
-  $("#note").oninput = e => item.note = e.target.value;
+  $("#note").oninput = e => { item.note = e.target.value; markChips(); };
+  document.querySelectorAll("[data-tpl]").forEach(b => b.onclick = () => {
+    // keep any add-on details already in the note, swap only the main sentence
+    const extras = S.noteChips.filter(c => item.note.includes(c));
+    item.note = [noteTemplates()[+b.dataset.tpl]].concat(extras).join(" ").slice(0, 1000);
+    $("#note").value = item.note; markChips();
+  });
+  document.querySelectorAll("[data-chip]").forEach(b => b.onclick = () => {
+    const c = S.noteChips[+b.dataset.chip];
+    item.note = item.note.includes(c) ? item.note.replace(c, "").replace(/\s{2,}/g, " ").trim() : (item.note.trim() + " " + c).trim().slice(0, 1000);
+    $("#note").value = item.note; markChips();
+  });
   $("#sku").oninput = e => item.sku = e.target.value.trim();
   if ($("#newSku")) $("#newSku").onclick = () => { item.sku = buildSku(); $("#sku").value = item.sku; };
   if ($("#shelf")) $("#shelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); item.sku = buildSku(); render(); };
@@ -1134,6 +1179,10 @@ function renderSettings(){
     <div class="lblprev" id="tktPrev" style="width:max-content"></div>
     <div class="row" style="margin-top:10px"><button class="mini" id="testPrint">Print a test label</button><button class="mini" id="testTicket">Print a test MF ticket</button></div>
 
+    <h2>Note add-ons</h2>
+    <label class="field">One per line. These show as tap-to-add buttons under the condition note.<textarea id="sChips" style="min-height:140px">${esc(S.noteChips.join("\n"))}</textarea></label>
+    <div class="row" style="margin-top:6px"><button class="mini" id="chipsReset">Reset to defaults</button></div>
+
     <h2>Condition notes</h2>
     ${CONDS.map(c => `<label class="field">${c.name}<textarea data-n="${c.id}" maxlength="1000">${esc(S.notes[c.id] || "")}</textarea></label>`).join("")}
     <div class="row" style="margin-top:16px;flex-wrap:wrap">
@@ -1143,6 +1192,8 @@ function renderSettings(){
     </div>`;
   $("#sWorker").onchange = e => { S.worker = e.target.value.trim(); save(); };
   $("#sKey").onchange = e => { S.key = e.target.value.trim(); save(); };
+  $("#sChips").onchange = e => { const l = e.target.value.split("\n").map(x => x.trim()).filter(Boolean).map(x => /[.!?]$/.test(x) ? x : x + "."); S.noteChips = l.length ? l : DEF_CHIPS; save(); };
+  $("#chipsReset").onclick = () => { S.noteChips = DEF_CHIPS; save(); renderSettings(); };
   $("#sKeepa").onchange = e => { try { localStorage.setItem("scout.key", JSON.stringify(e.target.value.trim())); } catch(err){} };
   $("#sChart").onchange = e => { S.chartAuto = e.target.checked; save(); };
   $("#sFba").onchange = e => { S.skuFba = e.target.value.trim() || "{DATE}-{COND}-{COST}-{RAND}"; save(); };
