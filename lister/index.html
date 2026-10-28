@@ -118,6 +118,10 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .chips button{font-size:12.5px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:var(--panel2)}
 .notes button[aria-pressed="true"],.chips button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:rgba(245,166,35,.1)}
+.sres{display:flex;gap:10px;align-items:center;width:100%;margin-top:8px;padding:8px;border-radius:10px;border:1px solid var(--line);background:var(--panel2)}
+.sres img,.sres .noimg{width:44px;height:58px;object-fit:contain;background:#fff;border-radius:6px;flex:none}
+.sres .t{display:block;font-weight:600;font-size:14px;line-height:1.25}
+.sres .m{display:block;font-size:12px;color:var(--muted);margin-top:2px}
 .kchart{width:100%;border-radius:10px;background:#fff;display:block;min-height:120px}
 .lblprev{background:#fff;color:#000;border-radius:6px;margin:10px auto 0;box-shadow:0 2px 10px rgba(0,0,0,.5);overflow:hidden}
 .lbl{box-sizing:border-box;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column;justify-content:center;align-items:center;overflow:hidden}
@@ -239,8 +243,58 @@ function blankItem(code){
 }
 
 // ---------- lookup ----------
+function mapCatalog(x){
+  const sum = (x.summaries && x.summaries[0]) || {};
+  const by = (sum.contributors || []).filter(c => /author/i.test(c.role && (c.role.value || c.role) || "")).map(c => c.value).join(", ");
+  return {
+    asin: x.asin,
+    title: sum.itemName || x.asin,
+    by: by || sum.brand || "",
+    year: sum.releaseDate ? String(sum.releaseDate).slice(0, 4) : "",
+    format: sum.websiteDisplayGroupName || "",
+    img: (x.images && x.images[0] && x.images[0].images && x.images[0].images[0] && x.images[0].images[0].link) || "",
+    productType: (x.productTypes && x.productTypes[0] && x.productTypes[0].productType) || null,
+    rank: (() => { const r = (x.salesRanks || [])[0] || {}; const d = (r.displayGroupRanks || [])[0] || (r.classificationRanks || [])[0]; return d ? d.rank : null; })()
+  };
+}
+// Typed words (not an ISBN/UPC/ASIN) = title search: show the matches to pick from
+const isCode = v => /^[0-9Xx\-\s]{8,17}$/.test(v) || /^B0[0-9A-Z]{8}$/i.test(v.trim());
+let search = null;   // {q, loading, err, results}
+async function titleSearch(q){
+  closeCam(); item = null;
+  search = {q, loading: true, results: []}; render();
+  try {
+    const d = await api("/lookup?q=" + encodeURIComponent(q));
+    search.results = (d.items || []).map(mapCatalog);
+    if (!search.results.length) search.err = "Nothing on Amazon matches \"" + q + "\".";
+  } catch(e){ search.err = e.message; }
+  search.loading = false; render();
+}
+function pickResult(i){
+  const r = search && search.results[i]; if (!r) return;
+  search = null;
+  item = blankItem(r.asin);
+  Object.assign(item, r, {matches: [], loading: false});
+  item.sku = buildSku();
+  render(); loadGate(); loadOffers();
+}
+function searchHTML(){
+  if (!search) return "";
+  if (search.loading) return `<div class="card"><span class="spin"></span> Searching Amazon for "${esc(search.q)}"…</div>`;
+  if (search.err) return `<div class="result bad">${esc(search.err)}</div>`;
+  return `<div class="card"><b>${search.results.length} results for "${esc(search.q)}"</b> <span class="note">· tap the right one</span>
+    ${search.results.map((r, i) => `<button class="sres" data-res="${i}">
+      ${r.img ? `<img src="${esc(r.img)}" alt="">` : `<span class="noimg"></span>`}
+      <span style="min-width:0;text-align:left"><span class="t">${esc(r.title)}</span>
+        <span class="m">${esc([r.by, r.format, r.year].filter(Boolean).join(" · "))}</span>
+        <span class="m num">${esc(r.asin)}${r.rank ? ` · rank ${kfmt(r.rank)}` : ""}</span></span></button>`).join("")}</div>`;
+}
 async function lookup(raw){
-  const code = String(raw || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+  raw = String(raw || "").trim();
+  if (!raw) return;
+  if (!isCode(raw)){ titleSearch(raw); return; }
+  search = null;
+  const code = raw.toUpperCase().replace(/[^0-9A-Z]/g, "");
   if (!code) return;
   closeCam();
   const keep = item && item.code === code ? item : null;
@@ -254,13 +308,7 @@ async function lookup(raw){
       item.asin = code; item.title = code;
     } else {
       const d = await api("/lookup?code=" + encodeURIComponent(code));
-      const items = (d.items || []).map(x => ({
-        asin: x.asin,
-        title: (x.summaries && x.summaries[0] && x.summaries[0].itemName) || x.asin,
-        img: (x.images && x.images[0] && x.images[0].images && x.images[0].images[0] && x.images[0].images[0].link) || "",
-        productType: (x.productTypes && x.productTypes[0] && x.productTypes[0].productType) || null,
-        rank: (() => { const r = (x.salesRanks || [])[0] || {}; const d = (r.displayGroupRanks || [])[0] || (r.classificationRanks || [])[0]; return d ? d.rank : null; })()
-      }));
+      const items = (d.items || []).map(mapCatalog);
       if (!items.length) throw new Error("No Amazon listing found for " + code + ".");
       item.matches = items;
       Object.assign(item, items[0]);
@@ -955,8 +1003,9 @@ function renderList(){
         : `<div class="result bad">Amazon didn't accept it${r.status ? " (" + esc(r.status) + ")" : ""}.<ul>${r.msgs.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`) : ""}`;
     }
   } else {
-    body = `<div class="card note">Scan a barcode, type an ISBN/UPC/ASIN, or use a Bluetooth scanner. Coming from Scout? Tap <b>List it</b> on a result.${S.batchMode ? "<br><b>Batch is on:</b> each book goes into the batch, then List all at once." : ""}</div>`;
+    body = `<div class="card note">Scan a barcode, type an ISBN/UPC/ASIN or a book title, or use a Bluetooth scanner. Coming from Scout? Tap <b>List it</b> on a result.${S.batchMode ? "<br><b>Batch is on:</b> each book goes into the batch, then List all at once." : ""}</div>`;
   }
+  if (!item && search) body = searchHTML();
   body = statsHTML() + batchHTML() + body;
   m.innerHTML = `
     <div class="top">
@@ -965,7 +1014,7 @@ function renderList(){
       <button class="chip ${S.batchMode ? "acc" : ""}" id="batchTog" aria-pressed="${S.batchMode}" style="margin-left:auto;padding:5px 10px;flex:none">${S.batchMode ? "Batch ON" : "Batch"}</button>
     </div>
     <div class="scanrow">
-      <input id="code" inputmode="text" autocomplete="off" autocapitalize="characters" placeholder="ISBN, UPC or ASIN" value="${esc(item ? item.code : "")}" enterkeyhint="search">
+      <input id="code" inputmode="text" autocomplete="off" autocapitalize="off" placeholder="ISBN, UPC, ASIN or title" value="${esc(item ? item.code : search ? search.q : "")}" enterkeyhint="search">
       <button class="btn pri" id="camBtn">Scan</button>
       <button class="btn" id="goBtn">Go</button>
     </div>
@@ -980,6 +1029,7 @@ function wireList(){
   $("#camBtn").onclick = openCam;
   $("#batchTog").onclick = () => { S.batchMode = !S.batchMode; save(); toast(S.batchMode ? "Batch on: scan, add, then List all" : "Batch off: list one at a time"); render(); };
   wireBatch(); wireStats(); wireChart();
+  document.querySelectorAll("[data-res]").forEach(b => b.onclick = () => pickResult(+b.dataset.res));
   document.querySelectorAll("#chan button").forEach(b => b.onclick = () => {
     S.channel = b.dataset.ch; save();
     if (item && !item.loading && !item.err){ item.sku = buildSku(); item.result = null; queueFees(); }
