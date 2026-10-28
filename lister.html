@@ -340,7 +340,7 @@ async function listIt(){
         warnings: (d.issues || []).map(i => i.message)};
       S.listed.unshift(entry);
       if (S.channel === "mf"){ do { S.ticket++; } while (ticketTaken(S.ticket)); }
-      save();
+      save(); syncSoon();
       it.result = {ok: true, entry};
       if (entry.channel === "fba") setTimeout(() => watchFnsku(entry), 0);
     } else {
@@ -348,6 +348,30 @@ async function listIt(){
     }
   } catch(e){ it.result = {ok: false, msgs: [e.message]}; }
   it.busy = false; render();
+}
+
+// ---------- sync Listed + MF ticket between devices (Worker KV) ----------
+let syncTimer = null, syncInfo = LS.get("syncInfo", null);
+function syncSoon(){ clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800); }
+async function sync(){
+  if (!S.worker || !S.key) return;
+  try {
+    const d = await api("/sync", {method: "POST", body: JSON.stringify({listed: S.listed, ticket: S.ticket})});
+    S.listed = d.listed || S.listed;
+    S.ticket = Math.max(S.ticket, d.ticket || 1);
+    while (ticketTaken(S.ticket)) S.ticket++;
+    save();
+    syncInfo = {ok: true, at: Date.now()};
+  } catch(e){
+    syncInfo = {ok: false, at: Date.now(), msg: e.status === 501 ? "Sync is off: the Worker has no KV storage named LISTED." : e.status === 404 ? "Sync is off: update the Worker code." : e.message};
+  }
+  LS.set("syncInfo", syncInfo);
+  if (tab === "listed") renderListed();
+}
+function syncLine(){
+  if (!syncInfo) return "Not synced yet";
+  const t = new Date(syncInfo.at).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+  return syncInfo.ok ? `<span class="pos">✓ Synced ${t}</span>` : `<span class="neg">${esc(syncInfo.msg)}</span>`;
 }
 
 // ---------- check a listing on Amazon ----------
@@ -377,7 +401,7 @@ async function checkStatus(entry){
     else if (e.status === 404){ st.state = "missing"; st.label = "Not found on Amazon yet"; st.msgs = ["New listings can take up to 15 minutes to show up. If it's still missing later, check Fix Your Products."]; }
     else { st.state = "fail"; st.label = "Couldn't check"; st.msgs = [e.message]; }
   }
-  entry.status = st; save();
+  entry.status = st; save(); syncSoon();
   return st;
 }
 async function fixListing(entry){
@@ -752,6 +776,7 @@ function renderListed(){
     <h2>Listed (${S.listed.length})</h2>
     <div class="row"><input id="q" placeholder="Search title, SKU, ticket, shelf" value="${esc(q)}"><button class="mini" id="csv">CSV</button></div>
     <div class="note" style="margin-top:6px">${rows.length} items · ${money(total)} listed value</div>
+    <div class="note row" style="margin-top:4px;justify-content:space-between"><span>${syncLine()}</span><button class="mini" id="syncNow">Sync now</button></div>
     <div class="list">${rows.map(x => `
       <div class="item">
         <div class="t">${esc(x.title)}</div>
@@ -765,6 +790,7 @@ function renderListed(){
       </div>`).join("") || `<div class="note" style="margin-top:12px">Nothing listed yet.</div>`}</div>`;
   $("#q").oninput = e => { LS.set("q", e.target.value); const p = e.target.selectionStart; renderListed(); const n = $("#q"); n.focus(); n.setSelectionRange(p, p); };
   $("#csv").onclick = exportCsv;
+  $("#syncNow").onclick = e => { e.currentTarget.innerHTML = '<span class="spin"></span>'; sync(); };
   document.querySelectorAll("[data-check]").forEach(b => b.onclick = async () => {
     const entry = S.listed.find(x => x.sku === b.dataset.check); if (!entry) return;
     b.disabled = true; b.innerHTML = '<span class="spin"></span> Checking';
@@ -825,7 +851,7 @@ function renderSettings(){
   $("#sKey").onchange = e => { S.key = e.target.value.trim(); save(); };
   $("#sFba").onchange = e => { S.skuFba = e.target.value.trim() || "{DATE}-{COND}-{COST}-{RAND}"; save(); };
   $("#sMf").onchange = e => { S.skuMf = e.target.value.trim() || "MF{TICKET}-{COND}-{COST}"; save(); };
-  $("#sTicket").onchange = e => { const n = parseInt(e.target.value); if (n > 0){ S.ticket = n; save(); if (ticketTaken(n)) toast("Ticket " + n + " was already used"); } };
+  $("#sTicket").onchange = e => { const n = parseInt(e.target.value); if (n > 0){ S.ticket = n; save(); syncSoon(); if (ticketTaken(n)) toast("Ticket " + n + " was already used"); } };
   $("#sShelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); };
   document.querySelectorAll("[data-n]").forEach(t => t.onchange = e => { S.notes = {...S.notes, [t.dataset.n]: e.target.value}; save(); });
   const sample = {title: "Yoga for the Body, Mind and Soul", cond: "very_good"};
@@ -845,7 +871,7 @@ function renderSettings(){
 }
 
 // ---------- start ----------
-document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { closeCam(); tab = b.dataset.tab; render(); });
+document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { closeCam(); tab = b.dataset.tab; render(); if (tab === "listed") sync(); });
 // Bluetooth scanners type fast and press Enter; keep the box ready on the List tab
 document.addEventListener("keydown", e => {
   if (tab !== "list") return;
@@ -858,6 +884,8 @@ render();
 const start = new URLSearchParams(location.search).get("code");
 if (!S.key){ tab = "settings"; render(); toast("Enter your app key to connect"); }
 else if (start) lookup(start);
+if (S.key) sync();
+document.addEventListener("visibilitychange", () => { if (!document.hidden && S.key) sync(); });
 </script>
 </body>
 </html>
