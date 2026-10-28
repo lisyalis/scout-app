@@ -69,6 +69,9 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .prices>div{padding:7px 4px;text-align:center}
 .prices .h{font:700 15px var(--display);letter-spacing:.08em}
 .prices .p{background:var(--panel);font-size:17px;padding:9px 4px}
+.gate{display:inline-block;margin:4px auto 2px;padding:3px 9px;border-radius:6px;font:700 13px var(--display);letter-spacing:.08em;background:rgba(0,0,0,.25);color:inherit;text-decoration:none}
+.gate.ok{background:rgba(0,0,0,.18)}
+.gate.bad{background:#7f1d1d;color:#fff}
 .target{font-size:12px;font-weight:600;opacity:.85;font-family:var(--mono)}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
 .tiles>div{padding:9px 6px;text-align:center;min-width:0}
@@ -252,7 +255,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-27a";
+const APP_VERSION = "2026-10-27b";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -293,7 +296,8 @@ const S = {
   // Amazon live offers through your own Cloudflare relay (same one Bethany Lister uses) = 0 Keepa tokens
   amzWorker: LS.get("amzWorker", (() => { try { return JSON.parse(localStorage.getItem("bl_worker")) || ""; } catch(e){ return ""; } })() || "https://bethanylister.wickedgoodproducts.workers.dev"),
   amzKey:    LS.get("amzKey", (() => { try { return JSON.parse(localStorage.getItem("bl_key")) || ""; } catch(e){ return ""; } })()),
-  amzOn:     LS.get("amzOn", true),  // barcode | text (live ISBN reading)
+  amzOn:     LS.get("amzOn", true),
+  skipGated: LS.get("skipGated", true),     // restricted items always SKIP  // barcode | text (live ISBN reading)
   ladder:   LS.get("ladder", true),        // triggers fall through to slower tiers
   roi:      LS.get("roi", {minProfit:5, minRoi:50, maxRank:6000000, minPulse:6}), // live offers cost ~12 tokens per scan
   history:  LS.get("history", []),
@@ -310,7 +314,7 @@ if (!LS.get("addedSlow", false)){
   }
   LS.set("addedSlow", true); LS.set("triggers", S.triggers);
 }
-function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","sound","amzWorker","amzKey","amzOn","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","sound","amzWorker","amzKey","amzOn","skipGated","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
 
 /* ============ helpers ============ */
 const $ = s => document.querySelector(s);
@@ -365,6 +369,15 @@ async function lookup(raw){
     if (!prods.length) throw new Error("No Amazon match for "+q+".");
     current = {product:prods[0], matches:prods.slice(1), cost:S.defCost, code:q};
     current.calc = calc(current.product, current.cost);
+    if (useAmazon()){
+      // check restrictions before announcing (max 2.5s) so BUY/SKIP and the sound are right
+      const mine = current, gp = loadGate(mine);
+      busy = false; renderScan();
+      await Promise.race([gp, new Promise(r => setTimeout(r, 2500))]);
+      if (ctl !== lookupCtl) return {ok:false, stale:true};
+      gp.then(() => { if (current === mine){ mine.calc = calc(mine.product, mine.cost); renderScan(); } });
+      current.calc = calc(current.product, current.cost);
+    }
     S.history.unshift(histEntry(current));
     S.history = S.history.slice(0,300);
     save();
@@ -420,6 +433,21 @@ async function amzApi(path){
   if (r.status === 429) { const e = new Error("Amazon busy"); e.retry = true; throw e; }
   if (!r.ok) throw new Error(d.error || (d.errors && d.errors[0] && d.errors[0].message) || ("Amazon error " + r.status));
   return d;
+}
+// Can you sell it? Amazon's restriction check through your relay (free)
+async function loadGate(cur){
+  cur.gate = "wait";
+  try{
+    const d = await amzApi(`/restrictions?asin=${cur.product.asin}&condition=${S.cond === "new" ? "new" : "very_good"}`);
+    const r = (d.restrictions || []).flatMap(x => x.reasons || []);
+    if (!r.length){ cur.gate = "ok"; cur.gateMsg = ""; cur.gateLink = ""; }
+    else {
+      cur.gate = "bad";
+      cur.gateMsg = r.map(x => x.message).filter(Boolean).join(" ");
+      const link = r.flatMap(x => x.links || []).find(l => l.resource);
+      cur.gateLink = link ? link.resource : `https://sellercentral.amazon.com/hz/approvalrequest/restrictions/approve?asin=${cur.product.asin}`;
+    }
+  }catch(e){ cur.gate = "err"; cur.gateMsg = e.message; }
 }
 const AMZ_COND = {new:1, mint:2, like_new:2, very_good:3, good:4, acceptable:5};
 function parseAmzOffers(d, kind){
@@ -611,6 +639,7 @@ function calc(p, cost){
   const res = {pr, sell, sellSrc, fees, profit, fbaFee, refPct, closing, lbs, isBook, buy:false, why:"", trigger:null};
   if (profit == null){ res.why = "No price"; return res; }
   if (p.isAdultProduct){ res.why = "Adult item"; return res; }
+  if (S.skipGated && current && current.product === p && current.gate === "bad"){ res.why = "Restricted"; res.gated = true; return res; }
   res.roi = cost > 0 ? res.profit / cost * 100 : null;
   if (S.mode === "ev") return evDecide(res);
   if (S.mode === "roi") return roiDecide(res);
@@ -669,7 +698,7 @@ function evDecide(res){
 }
 function histEntry(cur){
   const p = cur.product, c = cur.calc;
-  return {t:Date.now(), asin:p.asin, title:p.title, img:imgUrl(p), buy:c.buy, profit:c.profit, rank:c.pr.rank, pulse:c.pr.pulse, why:c.why};
+  return {t:Date.now(), asin:p.asin, title:p.title, img:imgUrl(p), buy:c.buy, profit:c.profit, rank:c.pr.rank, pulse:c.pr.pulse, why:c.why, gated:cur.gate === "bad"};
 }
 function imgUrl(p){
   let n = null;
@@ -730,6 +759,14 @@ function renderScanInner(err){
   $("#main").innerHTML = head + body + (err ? `<div class="err">${esc(err)}</div>` : "") + scanBar();
   wireScan();
 }
+function gateBadge(){
+  const g = current.gate;
+  if (!g) return "";
+  if (g === "wait") return `<span class="gate">Checking…</span>`;
+  if (g === "ok") return `<span class="gate ok">✓ OK TO SELL</span>`;
+  if (g === "bad") return `<a class="gate bad" target="_blank" rel="noopener" href="${esc(current.gateLink)}">⚠ RESTRICTED</a>`;
+  return `<span class="gate" title="${esc(current.gateMsg || "")}">Restriction check failed</span>`;
+}
 function resultHTML(){
   const p = current.product, c = current.calc, pr = c.pr;
   const cls = c.profit == null ? "" : c.buy ? "buy" : "skip";
@@ -737,7 +774,7 @@ function resultHTML(){
   return `
   <div class="verdict ${cls}">
     <div><span class="big num">${money(c.profit)}</span><span class="label">FBA profit</span></div>
-    <div><span class="vword">${c.profit==null ? "—" : c.buy ? "BUY" : "SKIP"}</span><span class="why">${c.buy ? "✓ " : ""}${esc(c.why)}</span>${c.target != null && c.profit != null ? `<span class="target">Target ${money(c.target)} · ${(S.mode==="ev" ? c.expected : c.profit) - c.target >= 0 ? "+" : "−"}${money(Math.abs((S.mode==="ev" ? c.expected : c.profit) - c.target)).replace("-","")}</span>` : ""}</div>
+    <div><span class="vword">${c.profit==null ? "—" : c.buy ? "BUY" : "SKIP"}</span>${gateBadge()}<span class="why">${c.buy ? "✓ " : ""}${esc(c.why)}</span>${c.target != null && c.profit != null ? `<span class="target">Target ${money(c.target)} · ${(S.mode==="ev" ? c.expected : c.profit) - c.target >= 0 ? "+" : "−"}${money(Math.abs((S.mode==="ev" ? c.expected : c.profit) - c.target)).replace("-","")}</span>` : ""}</div>
     <div><input class="costin num" id="cost" inputmode="decimal" value="${(Number(current.cost)||0).toFixed(2)}" aria-label="Buy cost"><span class="label">Buy cost</span></div>
   </div>
   <div class="stats" style="grid-template-columns:1fr 1fr">
@@ -748,11 +785,12 @@ function resultHTML(){
   ${tilesHTML()}
   ${offersHTML()}
   <div class="note" style="margin-top:6px">${c.roi != null ? `ROI ${Math.round(c.roi)}% · ` : ""}Fees ${money(c.fees)} = ${Math.round(c.refPct*100)}% referral${c.closing?" + $1.80 closing":""} + ${money(c.fbaFee)} FBA + ${money(c.lbs*S.inbound)} inbound${S.prep?" + prep":""} · offers: ${pr.countUsed} used / ${pr.countNew} new</div>
+  ${current.gate === "bad" && current.gateMsg ? `<div class="err" style="margin-top:8px">⚠ ${esc(current.gateMsg)}</div>` : ""}
   <div class="links">
     <a class="chip acc" href="lister/?code=${encodeURIComponent(current.code || p.asin)}&cost=${(Number(current.cost)||0).toFixed(2)}${c.sell ? "&price=" + Number(c.sell).toFixed(2) : ""}">List it</a>
     <button class="chip acc" id="chartBtn">Chart</button>
     <a class="chip" target="_blank" rel="noopener" href="https://www.amazon.com/dp/${p.asin}">Amazon</a>
-    <a class="chip" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/product-search/search?q=${p.asin}">Gated?</a>
+    <a class="chip" target="_blank" rel="noopener" href="${current.gate === "bad" ? esc(current.gateLink) : `https://sellercentral.amazon.com/product-search/search?q=${p.asin}`}">${current.gate === "bad" ? "Request approval" : "Gated?"}</a>
     <a class="chip" target="_blank" rel="noopener" href="https://www.ebay.com/sch/i.html?_nkw=${sc}&LH_Sold=1&LH_Complete=1">eBay sold</a>
     <a class="chip" target="_blank" rel="noopener" href="https://keepa.com/#!product/1-${p.asin}">Keepa</a>
     ${c.isBook ? `<a class="chip" target="_blank" rel="noopener" href="https://bookscouter.com/book/${current.code}">Buyback</a>` : ""}
@@ -1407,7 +1445,7 @@ async function contLookup(code){
 
   if (navigator.vibrate) navigator.vibrate(c.buy ? [60,40,60] : 120);
   showCamRes(c.buy ? "buy" : "skip", `<span class="w">${c.buy ? "BUY" : "SKIP"}</span><span class="t">${esc(p.title)}</span><span class="p num">${money(c.profit)}</span>
-    <span class="s">${esc(c.why)} · rank ${kfmt(c.pr.rank)} · pulse ${c.pr.pulse} · tap for details</span>`);
+    <span class="s">${current.gate === "bad" ? "⚠ RESTRICTED · " : ""}${esc(c.why)} · rank ${kfmt(c.pr.rank)} · pulse ${c.pr.pulse} · tap for details</span>`);
 }
 function setContBtn(){ const b = $("#contBtn"); b.setAttribute("aria-pressed", String(S.cont)); b.textContent = "Continuous: " + (S.cont ? "On" : "Off"); }
 $("#contBtn").onclick = () => { S.cont = !S.cont; save(); setContBtn(); };
@@ -1593,10 +1631,11 @@ function renderSettings(){
     <div class="row" style="margin-top:10px"><span class="grow">Buy box prices (+2 tokens)</span><label class="switch"><input type="checkbox" id="bb" ${S.buybox?"checked":""}><span></span></label></div>
   </div>
   <div class="card"><div class="label" style="margin-bottom:8px">Amazon live offers (free)</div>
-    <div class="note" style="margin-bottom:8px">Uses your Bethany Lister relay, so live offers cost 0 Keepa tokens and load after every scan.</div>
+    <div class="note" style="margin-bottom:8px">Uses your Bethany Lister relay: live offers and a restriction check after every scan, 0 Keepa tokens.</div>
     <div class="row"><span class="grow">Get offers from Amazon</span><label class="switch"><input type="checkbox" id="amzOn" ${S.amzOn?"checked":""}><span></span></label></div>
     <div class="field" style="margin-top:8px">Relay (Worker) URL<input id="amzWorker" value="${esc(S.amzWorker)}" autocapitalize="off" autocomplete="off"></div>
     <div class="field" style="margin-top:8px">App key (same as Bethany Lister)<input id="amzKey" type="password" value="${esc(S.amzKey)}" autocapitalize="off" autocomplete="off" placeholder="Paste your APP_KEY"></div>
+    <div class="row" style="margin-top:10px"><span class="grow">Always SKIP restricted items</span><label class="switch"><input type="checkbox" id="skipGated" ${S.skipGated?"checked":""}><span></span></label></div>
     <div class="row" style="margin-top:8px"><button class="mini" id="amzTest">Test</button><span class="note grow" id="amzOut"></span></div>
   </div>
   <div class="card"><div class="label" style="margin-bottom:8px">Costs</div>
@@ -1652,6 +1691,7 @@ function renderSettings(){
   $("#bb").onchange = e => { S.buybox = e.target.checked; save(); };
   $("#ao").onchange = e => { S.autoOffers = e.target.checked; save(); };
   $("#amzOn").onchange = e => { S.amzOn = e.target.checked; save(); };
+  $("#skipGated").onchange = e => { S.skipGated = e.target.checked; save(); };
   $("#amzWorker").onchange = e => { S.amzWorker = e.target.value.trim(); save(); };
   $("#amzKey").onchange = e => { S.amzKey = e.target.value.trim(); save(); toast("Amazon key saved"); };
   $("#amzTest").onclick = async () => {
