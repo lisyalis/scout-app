@@ -170,14 +170,7 @@ const DEF_NOTES = {
   good: "Good. Visible wear on cover and edges. Pages intact and readable.",
   acceptable: "Acceptable. Heavy wear, may have markings or highlighting. All pages present."
 };
-// Ready-made note choices per condition (tap to use), and add-on details (tap to add/remove)
-const NOTE_TEMPLATES = {
-  new: ["Brand new, unread copy.", "New, never read. May have minor shelf wear from storage.", "Brand new in original condition. Clean and crisp."],
-  like_new: ["Like new. Clean pages, tight binding, no markings.", "Like new, appears unread. Crisp pages and cover.", "Like new with minimal shelf wear. No writing or highlighting."],
-  very_good: ["Very good. Light shelf wear on cover. Pages clean, no markings.", "Very good. Minor wear to cover edges. Clean, unmarked pages.", "Very good. Light rubbing on cover. Binding tight, pages clean."],
-  good: ["Good. Visible wear on cover and edges. Pages intact and readable.", "Good. Moderate wear to cover and corners. Pages clean and intact.", "Good. Some creasing and edge wear. May have light markings."],
-  acceptable: ["Acceptable. Heavy wear, may have markings or highlighting. All pages present.", "Acceptable. Well-read copy with heavy wear. Readable, all pages intact.", "Acceptable. Significant wear and writing or highlighting. Complete text."],
-};
+// Add-on details for condition notes (tap to add/remove)
 const DEF_CHIPS = ["Ex-library with usual stamps and stickers.", "Some highlighting or underlining.", "Name written inside cover.", "Dust jacket not included.", "Remainder mark on page edge.", "Access code or CD not included.", "Cover has a crease.", "Light water stain, text not affected.", "Fulfilled by Amazon: fast shipping."];
 const S = {
   worker: LS.get("worker", "https://bethanylister.wickedgoodproducts.workers.dev"),
@@ -240,7 +233,7 @@ let item = null;   // {code, asin, title, img, matches:[], cost, price, gate, ga
 let feeTimer = null;
 
 function blankItem(code){
-  return {code, asin:null, title:"", img:"", matches:[], cost:"", price:"", note:S.notes[S.cond] || "", qty:1, source:S.source,
+  return {code, asin:null, title:"", img:"", matches:[], cost:"", price:"", note:notesFor(S.cond)[0] || "", qty:1, source:S.source,
     loading:true, err:null, gate:null, gateMsg:"", gateLink:"", offers:{}, offersErr:null, fees:null, feesErr:null,
     sku:"", result:null, busy:false};
 }
@@ -825,15 +818,18 @@ function wireChart(){
 }
 
 // ---------- condition note options ----------
+// Your notes from Settings → Condition notes. Each line in a box is its own choice.
+const notesFor = id => String(S.notes[id] || "").split("\n").map(x => x.trim()).filter(Boolean);
 function noteTemplates(){
-  const mine = S.notes[S.cond];
-  const list = NOTE_TEMPLATES[S.cond] || [];
-  return mine && !list.includes(mine) ? [mine].concat(list) : list;
+  const mine = notesFor(S.cond);
+  const others = CONDS.filter(c => c.id !== S.cond).flatMap(c => notesFor(c.id));
+  return mine.concat(others.filter(x => !mine.includes(x)));
 }
 function noteOptionsHTML(){
   const tpls = noteTemplates();
-  return `<div class="label" style="margin-top:8px">Pick a note · ${esc(condOf(S.cond).name)}</div>
-    <div class="notes">${tpls.map((t, i) => `<button data-tpl="${i}" aria-pressed="${item.note.startsWith(t)}">${esc(t)}</button>`).join("")}</div>
+  const mineN = notesFor(S.cond).length;
+  return `<div class="label" style="margin-top:8px">Your notes · ${esc(condOf(S.cond).name)} first</div>
+    <div class="notes">${tpls.map((t, i) => `<button data-tpl="${i}" aria-pressed="${item.note.startsWith(t)}" ${i >= mineN ? 'style="opacity:.75"' : ""}>${esc(t)}</button>`).join("") || '<div class="note">Add notes in Settings → Condition notes.</div>'}</div>
     <div class="label" style="margin-top:8px">Add details</div>
     <div class="chips">${S.noteChips.map((c, i) => `<button data-chip="${i}" aria-pressed="${item.note.includes(c)}">${esc(c.replace(/\.$/, ""))}</button>`).join("")}</div>`;
 }
@@ -992,9 +988,9 @@ function wireList(){
   if (!item || item.loading || item.err) return;
   document.querySelectorAll("[data-m]").forEach(b => b.onclick = () => choose(+b.dataset.m));
   document.querySelectorAll("#conds button").forEach(b => b.onclick = () => {
-    const was = S.notes[S.cond] || "";
+    const was = notesFor(S.cond)[0] || "";
     S.cond = b.dataset.c; save();
-    if (!item.note.trim() || item.note === was) item.note = S.notes[S.cond] || "";
+    if (!item.note.trim() || item.note === was) item.note = notesFor(S.cond)[0] || "";
     item.sku = buildSku(); item.result = null;
     render(); loadGate(); loadOffers();
   });
@@ -1195,7 +1191,8 @@ function renderSettings(){
     <div class="row" style="margin-top:6px"><button class="mini" id="chipsReset">Reset to defaults</button></div>
 
     <h2>Condition notes</h2>
-    ${CONDS.map(c => `<label class="field">${c.name}<textarea data-n="${c.id}" maxlength="1000">${esc(S.notes[c.id] || "")}</textarea></label>`).join("")}
+    <div class="note">One note per line. The first line is filled in automatically; every line shows as a tap-to-use choice on the List screen.</div>
+    ${CONDS.map(c => `<label class="field">${c.name}<textarea data-n="${c.id}" maxlength="5000">${esc(S.notes[c.id] || "")}</textarea></label>`).join("")}
     <div class="row" style="margin-top:16px;flex-wrap:wrap">
       <a class="chip" href="../">Open Scout</a>
       <a class="chip" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/fba/sendtoamazon">Send to Amazon</a>
