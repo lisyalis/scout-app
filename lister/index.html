@@ -36,14 +36,14 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 main{flex:1;overflow-y:auto;padding:12px max(14px,env(safe-area-inset-left,0px)) 24px max(14px,env(safe-area-inset-right,0px))}
 .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
-h1{font:700 19px/1 var(--display);letter-spacing:.03em;margin:0;text-transform:uppercase;white-space:nowrap}
+h1{font:700 18px/1 var(--display);letter-spacing:.03em;margin:0;text-transform:uppercase;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
 h2{font:700 20px/1.1 var(--display);letter-spacing:.03em;margin:14px 0 8px;text-transform:uppercase}
 .note{color:var(--muted);font-size:13px}
 nav.tabs{display:grid;grid-template-columns:repeat(3,1fr);background:var(--panel);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px)}
 nav.tabs button{padding:9px 0 7px;display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--muted);font-size:12px}
 nav.tabs button[aria-current="true"]{color:var(--accent)}
 nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8}
-.top{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.top{display:flex;align-items:center;gap:6px;margin-bottom:12px}
 .top a{margin-left:auto;padding:6px 10px;flex:none}
 .top .seg{flex:none}
 .top .seg button{padding:5px 10px}
@@ -110,7 +110,7 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 #labelSheet{display:none}
 .lblprev{background:#fff;color:#000;border-radius:6px;margin:10px auto 0;box-shadow:0 2px 10px rgba(0,0,0,.5);overflow:hidden}
 .lbl{box-sizing:border-box;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column;justify-content:center;align-items:center;overflow:hidden}
-.lbl svg{display:block;width:100%}
+.lbl svg{display:block;width:100%;height:100%}
 .lbl .fn{font-weight:700;letter-spacing:.06em;line-height:1}
 .lbl .tt{width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;line-height:1.1}
 .lbl .cd{font-weight:700;line-height:1.1}
@@ -169,8 +169,11 @@ const S = {
   notes: LS.get("notes", DEF_NOTES),
   listed: LS.get("listed", []),
   labelSize: LS.get("labelSize", "30334"),
+  batchMode: LS.get("batchMode", false),
+  batch: LS.get("batch", []),
 };
-function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch"]) LS.set(k, S[k]); }
+const live = () => S.listed.filter(x => !x.deleted);
 
 // ---------- helpers ----------
 const $ = s => document.querySelector(s);
@@ -318,37 +321,117 @@ function buildSku(){
     .replace(/\{SHELF\}/g, S.shelf)
     .replace(/\s+/g, "").slice(0, 40);
 }
-function ticketTaken(n){ return S.listed.some(x => x.channel === "mf" && x.ticket === n); }
+function ticketTaken(n){ return S.listed.some(x => x.channel === "mf" && x.ticket === n) || S.batch.some(x => x.channel === "mf" && x.ticket === n && x.state !== "listed"); }
+function nextTicket(){ do { S.ticket++; } while (ticketTaken(S.ticket)); }
 
 // ---------- list it ----------
-async function listIt(){
-  const it = item;
-  const price = parseFloat(it.price);
-  if (!(price > 0)){ toast("Enter a price"); return; }
-  if (!it.sku){ toast("Enter a SKU"); return; }
-  if (S.listed.some(x => x.sku === it.sku)){ toast("That SKU was already used. Change it."); return; }
-  if (S.channel === "mf" && ticketTaken(S.ticket)){ toast("Ticket " + S.ticket + " is already used. Change it in Settings."); return; }
-  it.busy = true; it.result = null; render();
+function snapshot(){
+  return {code: item.code, asin: item.asin, title: item.title, img: item.img || "", productType: item.productType || null,
+    cond: S.cond, channel: S.channel, price: parseFloat(item.price), cost: parseFloat(item.cost) || 0, note: (item.note || "").trim(),
+    qty: S.channel === "mf" ? (parseInt(item.qty) || 1) : undefined, sku: item.sku,
+    ticket: S.channel === "mf" ? S.ticket : null, shelf: S.channel === "mf" ? S.shelf : null};
+}
+function checkSnap(sn){
+  if (!(sn.price > 0)) return "Enter a price";
+  if (!sn.sku) return "Enter a SKU";
+  if (S.listed.some(x => x.sku === sn.sku) || S.batch.some(x => x.sku === sn.sku && x.state !== "listed")) return "That SKU was already used. Tap New SKU.";
+  if (sn.channel === "mf" && ticketTaken(sn.ticket)) return "Ticket " + sn.ticket + " is already used. Change it in Settings.";
+  return null;
+}
+// send one listing to Amazon; on success it goes into Listed
+async function listOne(sn){
   try {
     const d = await api("/list", {method: "POST", body: JSON.stringify({
-      sku: it.sku, asin: it.asin, productType: it.productType || undefined, condition: S.cond, note: it.note.trim(), price,
-      fba: S.channel === "fba", qty: S.channel === "mf" ? (parseInt(it.qty) || 1) : undefined
-    })});
+      sku: sn.sku, asin: sn.asin, productType: sn.productType || undefined, condition: sn.cond, note: sn.note, price: sn.price,
+      fba: sn.channel === "fba", qty: sn.channel === "mf" ? sn.qty : undefined})});
     const errs = (d.issues || []).filter(i => i.severity === "ERROR");
     if (d.status === "ACCEPTED" && !errs.length){
-      const entry = {at: Date.now(), sku: it.sku, asin: it.asin, productType: it.productType || null, code: it.code, title: it.title, cond: S.cond, channel: S.channel,
-        price, cost: parseFloat(it.cost) || 0, ticket: S.channel === "mf" ? S.ticket : null, shelf: S.channel === "mf" ? S.shelf : null,
-        warnings: (d.issues || []).map(i => i.message)};
-      S.listed.unshift(entry);
-      if (S.channel === "mf"){ do { S.ticket++; } while (ticketTaken(S.ticket)); }
-      save(); syncSoon();
-      it.result = {ok: true, entry};
-      if (entry.channel === "fba") setTimeout(() => watchFnsku(entry), 0);
-    } else {
-      it.result = {ok: false, msgs: (errs.length ? errs : (d.issues || [])).map(i => i.message + (i.attributeNames ? " (" + i.attributeNames.join(", ") + ")" : "")), status: d.status};
+      const entry = {at: Date.now(), sku: sn.sku, asin: sn.asin, productType: sn.productType, code: sn.code, title: sn.title,
+        cond: sn.cond, channel: sn.channel, price: sn.price, cost: sn.cost, note: sn.note,
+        ticket: sn.ticket, shelf: sn.shelf, warnings: (d.issues || []).map(i => i.message)};
+      S.listed.unshift(entry); save(); syncSoon();
+      watch(entry);
+      return {ok: true, entry};
     }
-  } catch(e){ it.result = {ok: false, msgs: [e.message]}; }
-  it.busy = false; render();
+    return {ok: false, status: d.status, msgs: (errs.length ? errs : (d.issues || [])).map(i => i.message + (i.attributeNames ? " (" + i.attributeNames.join(", ") + ")" : ""))};
+  } catch(e){ return {ok: false, msgs: [e.message]}; }
+}
+async function listIt(){
+  const sn = snapshot(), bad = checkSnap(sn);
+  if (bad){ toast(bad); return; }
+  item.busy = true; item.result = null; render();
+  const r = await listOne(sn);
+  if (r.ok && sn.channel === "mf") nextTicket();
+  save();
+  item.result = r; item.busy = false; render();
+}
+function addToBatch(){
+  const sn = snapshot(), bad = checkSnap(sn);
+  if (bad){ toast(bad); return; }
+  sn.state = "ready";
+  S.batch.push(sn);
+  if (sn.channel === "mf") nextTicket();
+  save();
+  toast("Added · " + S.batch.filter(x => x.state !== "listed").length + " in batch");
+  item = null; render(); const c = $("#code"); if (c) c.focus();
+}
+let batchBusy = false;
+async function listAll(){
+  if (batchBusy) return;
+  const todo = S.batch.filter(x => x.state !== "listed");
+  if (!todo.length) return;
+  batchBusy = true;
+  for (const sn of todo){
+    sn.state = "listing"; sn.msg = ""; renderBatch();
+    const r = await listOne(sn);
+    if (r.ok){ sn.state = "listed"; } else { sn.state = "error"; sn.msg = r.msgs.join(" "); }
+    save(); renderBatch();
+    await new Promise(res => setTimeout(res, 300));
+  }
+  batchBusy = false; renderBatch();
+  const okN = todo.filter(x => x.state === "listed").length, errN = todo.length - okN;
+  toast(`Listed ${okN}` + (errN ? ` · ${errN} need fixing` : ""));
+}
+function batchEntries(){ return S.batch.filter(x => x.state === "listed").map(x => S.listed.find(e => e.sku === x.sku)).filter(Boolean); }
+function batchHTML(){
+  if (!S.batch.length) return "";
+  const open = S.batch.filter(x => x.state !== "listed").length;
+  const done = batchEntries();
+  const ready = done.filter(e => e.channel === "mf" || (e.status && e.status.fnsku)).length;
+  const waiting = done.filter(e => e.channel === "fba" && !(e.status && e.status.fnsku)).length;
+  const val = S.batch.reduce((a, x) => a + (x.price || 0), 0);
+  const row = (x, i) => {
+    const e = x.state === "listed" ? S.listed.find(y => y.sku === x.sku) : null;
+    const icon = x.state === "listed" ? '<span class="pos">✓</span>' : x.state === "error" ? '<span class="neg">✗</span>' : x.state === "listing" ? '<span class="spin"></span>' : "•";
+    return `<div class="item" style="margin-top:6px;padding:8px 10px">
+      <div class="row"><b style="width:18px">${icon}</b><div style="flex:1;min-width:0"><div class="t">${esc(x.title)}</div>
+        <div class="m"><span class="tag ${x.channel}">${x.channel.toUpperCase()}</span> ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")}` : ""}${e && e.status && e.status.fnsku ? ` · ${esc(e.status.fnsku)}` : ""}</div>
+        ${x.msg ? `<div class="m neg">${esc(x.msg)}</div>` : ""}</div>
+        ${x.state !== "listed" && x.state !== "listing" ? `<button class="mini" data-brm="${i}" aria-label="Remove">✕</button>` : ""}</div></div>`;
+  };
+  return `<div class="card" id="batchPanel">
+    <div class="row" style="justify-content:space-between"><b>Batch · ${S.batch.length} books · ${money(val)}</b><button class="mini" id="bClear">Clear done</button></div>
+    ${S.batch.map(row).join("")}
+    <div class="row" style="margin-top:10px">
+      <button class="btn pri" id="bList" style="flex:1" ${open && !batchBusy ? "" : "disabled"}>${batchBusy ? '<span class="spin"></span> Listing…' : `List all (${open})`}</button>
+      <button class="btn" id="bPrint" style="flex:1" ${ready ? "" : "disabled"}>Print labels (${ready})</button>
+    </div>
+    ${waiting ? `<div class="note" style="margin-top:6px"><span class="spin"></span> Waiting on Amazon for ${waiting} FNSKU${waiting > 1 ? "s" : ""}…</div>` : ""}
+  </div>`;
+}
+function renderBatch(){
+  const p = $("#batchPanel");
+  if (!p){ if (tab === "list") renderSoon(); return; }
+  const html = batchHTML();
+  if (!html){ p.remove(); return; }
+  p.outerHTML = html; wireBatch();
+}
+function wireBatch(){
+  if (!$("#batchPanel")) return;
+  document.querySelectorAll("[data-brm]").forEach(b => b.onclick = () => { S.batch.splice(+b.dataset.brm, 1); save(); renderBatch(); });
+  $("#bClear").onclick = () => { S.batch = S.batch.filter(x => x.state !== "listed"); save(); renderBatch(); };
+  $("#bList").onclick = listAll;
+  $("#bPrint").onclick = () => printAll(batchEntries());
 }
 
 // ---------- sync Listed + MF ticket between devices (Worker KV) ----------
@@ -367,7 +450,7 @@ async function sync(){
     syncInfo = {ok: false, at: Date.now(), msg: e.status === 501 ? "Sync is off: the Worker has no KV storage named LISTED." : e.status === 404 ? "Sync is off: update the Worker code." : e.message};
   }
   LS.set("syncInfo", syncInfo);
-  if (tab === "listed") renderListed();
+  if (tab === "listed" && !editing) renderListed();
 }
 function syncLine(){
   if (!syncInfo) return "Not synced yet";
@@ -405,15 +488,16 @@ async function checkStatus(entry){
   entry.status = st; save(); syncSoon();
   return st;
 }
-async function fixListing(entry){
+async function fixListing(entry, quiet){
   try {
     const d = await api("/fix", {method: "POST", body: JSON.stringify({sku: entry.sku, productType: entry.productType || undefined,
       price: entry.price, fba: entry.channel === "fba", qty: entry.channel === "mf" ? 1 : undefined})});
     const errs = (d.issues || []).filter(i => i.severity === "ERROR");
+    if (quiet) return;
     if (d.status === "ACCEPTED" && !errs.length) toast("Sent. Check again in a few minutes.");
     else toast("Amazon: " + ((errs[0] || (d.issues || [])[0] || {}).message || d.status));
   } catch(e){
-    toast(e.status === 404 && e.message === "not found" ? "Update the Worker first" : e.message);
+    if (!quiet) toast(e.status === 404 && e.message === "not found" ? "Update the Worker first" : e.message);
   }
 }
 function statusHTML(st){
@@ -457,47 +541,85 @@ function labelHTML(entry, fnsku){
     <div class="cd" style="font-size:${(h * 6.2).toFixed(1)}pt">${esc(cond)}</div>
   </div>`;
 }
-function printLabels(entry, fnsku, qty){
-  fnsku = String(fnsku || "").trim().toUpperCase();
-  if (!/^[A-Z0-9]{10}$/.test(fnsku)){ toast("FNSKU should be 10 letters/numbers, like X00ABC1234"); return; }
+function ticketHTML(entry){
+  const L = LABELS[S.labelSize] || LABELS["30334"], h = L.h;
+  return `<div class="lbl" style="width:${L.w}in;height:${h}in;padding:${0.05}in ${0.1}in">
+    <div class="fn" style="font-size:${(h * 17).toFixed(1)}pt">#${String(entry.ticket).padStart(5, "0")}</div>
+    <div class="cd" style="font-size:${(h * 9).toFixed(1)}pt">Shelf ${esc(entry.shelf || "")} · ${esc(condOf(entry.cond).short)} · ${money(entry.price)}</div>
+    <div style="width:100%;height:${(h * 0.26).toFixed(3)}in;margin-top:.02in">${code128Svg(entry.sku)}</div>
+    <div class="tt" style="font-size:${(h * 5.5).toFixed(1)}pt">${esc(entry.sku)} · ${esc(String(entry.title || "").slice(0, 60))}</div>
+  </div>`;
+}
+function printSheet(htmls){
+  if (!htmls.length){ toast("Nothing to print yet"); return; }
   const L = LABELS[S.labelSize] || LABELS["30334"];
   let sheet = $("#labelSheet");
   if (!sheet){ sheet = document.createElement("div"); sheet.id = "labelSheet"; document.body.appendChild(sheet); }
-  sheet.innerHTML = Array.from({length: Math.max(1, qty || 1)}, () => labelHTML(entry, fnsku)).join("");
+  sheet.innerHTML = htmls.join("");
   let st = $("#labelPage");
   if (!st){ st = document.createElement("style"); st.id = "labelPage"; document.head.appendChild(st); }
   st.textContent = `@page{size:${L.w}in ${L.h}in;margin:0}`;
   setTimeout(() => window.print(), 50);
 }
+function printLabels(entry, fnsku, qty){
+  fnsku = String(fnsku || "").trim().toUpperCase();
+  if (!/^[A-Z0-9]{10}$/.test(fnsku)){ toast("FNSKU should be 10 letters/numbers, like X00ABC1234"); return; }
+  printSheet(Array.from({length: Math.max(1, qty || 1)}, () => labelHTML(entry, fnsku)));
+}
+// FBA books with an FNSKU get item labels, MF books get shelf tickets
+function printAll(entries){
+  const html = [];
+  for (const e of entries){
+    if (e.channel === "fba" && e.status && e.status.fnsku) html.push(labelHTML(e, e.status.fnsku));
+    else if (e.channel === "mf" && e.ticket) html.push(ticketHTML(e));
+  }
+  printSheet(html);
+}
 function askAndPrint(entry){
+  if (entry.channel === "mf"){ printSheet([ticketHTML(entry)]); return; }
   const known = entry.status && entry.status.fnsku;
   const fn = known || prompt("FNSKU for this book (starts with X00). Find it in Manage All Inventory.", "");
   if (!fn) return;
   const q = parseInt(prompt("How many labels?", "1")) || 1;
   printLabels(entry, fn, q);
 }
-// after listing on FBA: ask Amazon every 30s until the FNSKU exists (max 15 min)
-let fnPoll = null;
-function watchFnsku(entry){
-  clearTimeout(fnPoll);
-  let tries = 0;
-  const step = async () => {
-    if (!item || !item.result || !item.result.ok || item.result.entry.sku !== entry.sku) return;
-    tries++;
+// After listing, ask Amazon every 30s until the listing has its FNSKU (FBA) and price.
+// If the price still hasn't stuck after ~4 minutes, re-send price & channel once by itself.
+const watching = new Map();   // sku -> {tries, fixed}
+let watchTimer = null;
+function watch(entry){
+  watching.set(entry.sku, {tries: 0, fixed: false});
+  if (!watchTimer) watchTimer = setTimeout(watchRound, 20000);
+}
+async function watchRound(){
+  watchTimer = null;
+  for (const [sku, w] of [...watching]){
+    const entry = S.listed.find(x => x.sku === sku);
+    if (!entry || entry.deleted){ watching.delete(sku); continue; }
+    w.tries++;
     await checkStatus(entry);
-    if (!item || !item.result || item.result.entry.sku !== entry.sku) return;
-    const box = $("#checkRes"); if (box) box.innerHTML = statusHTML(entry.status);
-    const pb = $("#printLbl");
-    if (entry.status && entry.status.fnsku){
-      if (pb){ pb.disabled = false; pb.textContent = "Print label · " + entry.status.fnsku; }
-      if (navigator.vibrate) navigator.vibrate([60, 60, 60]);
-      return;
-    }
-    if (pb) pb.innerHTML = '<span class="spin"></span> Waiting for FNSKU…';
-    if (tries < 30) fnPoll = setTimeout(step, 30000);
-    else if (pb){ pb.disabled = false; pb.textContent = "Print label (type FNSKU)"; }
-  };
-  fnPoll = setTimeout(step, 20000);
+    const st = entry.status || {};
+    const priced = "price" in st && st.price != null;
+    if (!priced && !w.fixed && w.tries >= 8 && st.state !== "missing" && st.state !== "fail"){ w.fixed = true; await fixListing(entry, true); }
+    const doneFba = entry.channel !== "fba" || st.fnsku;
+    if ((doneFba && priced) || w.tries >= 30) watching.delete(sku);
+    if (entry.channel === "fba" && st.fnsku && !w.buzzed){ w.buzzed = true; if (navigator.vibrate) navigator.vibrate([60, 60, 60]); }
+    updateWatchUI(entry);
+    await new Promise(r => setTimeout(r, 400));
+  }
+  renderBatch();
+  if (tab === "listed" && !editing) renderListed();
+  if (watching.size) watchTimer = setTimeout(watchRound, 30000);
+}
+function updateWatchUI(entry){
+  if (!item || !item.result || !item.result.ok || item.result.entry.sku !== entry.sku) return;
+  item.result.entry = entry;
+  const box = $("#checkRes"); if (box) box.innerHTML = statusHTML(entry.status);
+  const pb = $("#printLbl");
+  if (pb && entry.channel === "fba"){
+    if (entry.status && entry.status.fnsku){ pb.disabled = false; pb.textContent = "Print label · " + entry.status.fnsku; }
+    else if (!watching.has(entry.sku)){ pb.disabled = false; pb.textContent = "Print label (type FNSKU)"; }
+  }
 }
 
 // ---------- camera (same method as Scout: own decode loop on the box area) ----------
@@ -696,28 +818,32 @@ function renderList(){
           : `<div class="field">&nbsp;<button class="mini" id="newSku">New SKU</button></div>`}
       </div>
       ${item.gate === "bad" ? `<div class="note" style="margin-top:10px;color:var(--warn)">This item is restricted for you in this condition. Amazon will likely reject the listing until you're approved.</div>` : ""}
-      <button class="btn go" id="listBtn" ${item.busy ? "disabled" : ""}>${item.busy ? '<span class="spin"></span> LISTING…' : `LIST IT · ${S.channel.toUpperCase()}`}</button>
+      ${S.batchMode
+        ? `<button class="btn go" id="addBatch" style="background:var(--accent);border-color:var(--accent);color:var(--accent-ink)">ADD TO BATCH · ${S.channel.toUpperCase()}</button>`
+        : `<button class="btn go" id="listBtn" ${item.busy ? "disabled" : ""}>${item.busy ? '<span class="spin"></span> LISTING…' : `LIST IT · ${S.channel.toUpperCase()}`}</button>`}
       ${r ? (r.ok
         ? `<div class="result ok">✓ Listed. SKU <span class="num">${esc(r.entry.sku)}</span>${r.entry.ticket ? ` · ticket #${String(r.entry.ticket).padStart(5, "0")} · shelf ${esc(r.entry.shelf)}` : ""}
-            <div class="note" style="margin-top:4px">Amazon accepted it. It shows in Manage Inventory within a few minutes.${S.channel === "fba" ? " Add it to a shipment in Send to Amazon." : ""}</div>
+            <div class="note" style="margin-top:4px">Amazon accepted it. The Lister keeps checking it for you${r.entry.channel === "fba" ? " until the FNSKU is ready" : ""}.</div>
             ${r.entry.warnings.length ? `<ul>${r.entry.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
             <div id="checkRes" style="color:var(--fg);margin-top:8px">${statusHTML(r.entry.status)}</div>
-            ${S.channel === "fba" ? `<button class="btn pri" id="printLbl" style="width:100%;margin-top:10px" ${r.entry.status && r.entry.status.fnsku ? "" : "disabled"}>${r.entry.status && r.entry.status.fnsku ? "Print label · " + esc(r.entry.status.fnsku) : '<span class="spin"></span> Waiting for FNSKU…'}</button>` : ""}
+            ${r.entry.channel === "fba" ? `<button class="btn pri" id="printLbl" style="width:100%;margin-top:10px" ${r.entry.status && r.entry.status.fnsku ? "" : "disabled"}>${r.entry.status && r.entry.status.fnsku ? "Print label · " + esc(r.entry.status.fnsku) : '<span class="spin"></span> Waiting for FNSKU…'}</button>`
+              : `<button class="btn pri" id="printLbl" style="width:100%;margin-top:10px">Print shelf ticket #${String(r.entry.ticket).padStart(5, "0")}</button>`}
             <div class="row" style="margin-top:10px">
               <button class="btn pri" id="nextBtn" style="flex:1">Next item</button>
               <button class="btn" id="checkNow" style="flex:1">Check on Amazon</button>
-              ${S.channel === "fba" ? `<a class="btn" style="flex:1;text-decoration:none" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/fba/sendtoamazon">Send to Amazon</a>` : ""}
+              ${r.entry.channel === "fba" ? `<a class="btn" style="flex:1;text-decoration:none" target="_blank" rel="noopener" href="https://sellercentral.amazon.com/fba/sendtoamazon">Send to Amazon</a>` : ""}
             </div></div>`
         : `<div class="result bad">Amazon didn't accept it${r.status ? " (" + esc(r.status) + ")" : ""}.<ul>${r.msgs.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>`) : ""}`;
     }
   } else {
-    body = `<div class="card note">Scan a barcode, type an ISBN/UPC/ASIN, or use a Bluetooth scanner. Coming from Scout? Tap <b>List it</b> on a result.</div>`;
+    body = `<div class="card note">Scan a barcode, type an ISBN/UPC/ASIN, or use a Bluetooth scanner. Coming from Scout? Tap <b>List it</b> on a result.${S.batchMode ? "<br><b>Batch is on:</b> each book goes into the batch, then List all at once." : ""}</div>`;
   }
+  body = batchHTML() + body;
   m.innerHTML = `
     <div class="top">
       <h1>Bethany Lister</h1>
       <div class="seg" id="chan"><button data-ch="fba" aria-pressed="${S.channel === "fba"}">FBA</button><button data-ch="mf" aria-pressed="${S.channel === "mf"}">MF</button></div>
-      <a class="chip" href="../">Scout</a>
+      <button class="chip ${S.batchMode ? "acc" : ""}" id="batchTog" aria-pressed="${S.batchMode}" style="margin-left:auto;padding:5px 10px;flex:none">${S.batchMode ? "Batch ON" : "Batch"}</button>
     </div>
     <div class="scanrow">
       <input id="code" inputmode="text" autocomplete="off" autocapitalize="characters" placeholder="ISBN, UPC or ASIN" value="${esc(item ? item.code : "")}" enterkeyhint="search">
@@ -733,6 +859,8 @@ function wireList(){
   code.onkeydown = e => { if (e.key === "Enter"){ e.preventDefault(); lookup(code.value); } };
   $("#goBtn").onclick = () => lookup(code.value);
   $("#camBtn").onclick = openCam;
+  $("#batchTog").onclick = () => { S.batchMode = !S.batchMode; save(); toast(S.batchMode ? "Batch on: scan, add, then List all" : "Batch off: list one at a time"); render(); };
+  wireBatch();
   document.querySelectorAll("#chan button").forEach(b => b.onclick = () => {
     S.channel = b.dataset.ch; save();
     if (item && !item.loading && !item.err){ item.sku = buildSku(); item.result = null; queueFees(); }
@@ -756,8 +884,9 @@ function wireList(){
   $("#sku").oninput = e => item.sku = e.target.value.trim();
   if ($("#newSku")) $("#newSku").onclick = () => { item.sku = buildSku(); $("#sku").value = item.sku; };
   if ($("#shelf")) $("#shelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); item.sku = buildSku(); render(); };
-  $("#listBtn").onclick = listIt;
-  if ($("#nextBtn")) $("#nextBtn").onclick = () => { clearTimeout(fnPoll); item = null; render(); $("#code").focus(); };
+  if ($("#listBtn")) $("#listBtn").onclick = listIt;
+  if ($("#addBatch")) $("#addBatch").onclick = addToBatch;
+  if ($("#nextBtn")) $("#nextBtn").onclick = () => { item = null; render(); $("#code").focus(); };
   if ($("#printLbl")) $("#printLbl").onclick = () => askAndPrint(S.listed.find(x => x.sku === item.result.entry.sku) || item.result.entry);
   if ($("#checkNow")) $("#checkNow").onclick = async e => {
     const btn = e.currentTarget, entry = S.listed.find(x => x.sku === item.result.entry.sku) || item.result.entry;
@@ -769,15 +898,22 @@ function wireList(){
   };
 }
 
+let editing = null;
+const scLink = x => `https://sellercentral.amazon.com/myinventory/inventory?searchField=all&searchTerm=${encodeURIComponent(x.sku)}`;
 function renderListed(){
   const q = (LS.get("q", "") || "").toLowerCase();
-  const rows = S.listed.filter(x => !q || [x.title, x.sku, x.asin, x.code, x.shelf, x.ticket].join(" ").toLowerCase().includes(q));
+  const all = live();
+  const rows = all.filter(x => !q || [x.title, x.sku, x.asin, x.code, x.shelf, x.ticket].join(" ").toLowerCase().includes(q));
   const total = rows.reduce((a, x) => a + x.price, 0);
+  const today = new Date().toDateString();
+  const todays = all.filter(x => new Date(x.at).toDateString() === today);
+  const todayReady = todays.filter(x => x.channel === "mf" || (x.status && x.status.fnsku)).length;
   $("#main").innerHTML = `
-    <h2>Listed (${S.listed.length})</h2>
+    <h2>Listed (${all.length})</h2>
     <div class="row"><input id="q" placeholder="Search title, SKU, ticket, shelf" value="${esc(q)}"><button class="mini" id="csv">CSV</button></div>
     <div class="note" style="margin-top:6px">${rows.length} items · ${money(total)} listed value</div>
     <div class="note row" style="margin-top:4px;justify-content:space-between"><span>${syncLine()}</span><button class="mini" id="syncNow">Sync now</button></div>
+    ${todays.length ? `<button class="btn" id="printToday" style="width:100%;margin-top:10px" ${todayReady ? "" : "disabled"}>Print today's labels & tickets (${todayReady} of ${todays.length} ready)</button>` : ""}
     <div class="list">${rows.map(x => `
       <div class="item">
         <div class="t">${esc(x.title)}</div>
@@ -785,32 +921,83 @@ function renderListed(){
           ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)} · ${new Date(x.at).toLocaleDateString()}</div>
         <div class="m num">${esc(x.sku)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")} · shelf ${esc(x.shelf)}` : ""}</div>
         <div data-st="${esc(x.sku)}">${statusHTML(x.status)}</div>
-        <div class="row" style="margin-top:8px;flex-wrap:wrap"><button class="mini" data-check="${esc(x.sku)}">Check on Amazon</button>
-        ${x.channel === "fba" ? `<button class="mini" data-print="${esc(x.sku)}">Print label</button>` : ""}
-        ${x.status && "price" in x.status && x.status.price == null ? `<button class="mini" data-fix="${esc(x.sku)}" style="border-color:var(--accent);color:var(--accent)">Resend price & ${x.channel === "fba" ? "FBA" : "MF"}</button>` : ""}</div>
+        ${editing === x.sku ? `
+          <div class="grid2" style="margin-top:8px">
+            <label class="field">Price<input id="ePrice" class="num" inputmode="decimal" value="${x.price.toFixed(2)}"></label>
+            <div></div>
+          </div>
+          <label class="field">Condition note<textarea id="eNote" maxlength="1000">${esc(x.note || "")}</textarea></label>
+          <div class="row" style="margin-top:8px"><button class="btn pri" id="eSave" style="flex:1">Save to Amazon</button><button class="btn" id="eCancel" style="flex:1">Cancel</button></div>`
+        : `<div class="row" style="margin-top:8px;flex-wrap:wrap">
+          <button class="mini" data-check="${esc(x.sku)}">Check</button>
+          <button class="mini" data-print="${esc(x.sku)}">${x.channel === "fba" ? "Print label" : "Print ticket"}</button>
+          <button class="mini" data-edit="${esc(x.sku)}">Edit</button>
+          <a class="mini" style="text-decoration:none;color:var(--fg)" target="_blank" rel="noopener" href="${scLink(x)}">Seller Central</a>
+          <button class="mini" data-del="${esc(x.sku)}" style="color:var(--skip)">Delete</button>
+          ${x.status && "price" in x.status && x.status.price == null ? `<button class="mini" data-fix="${esc(x.sku)}" style="border-color:var(--accent);color:var(--accent)">Resend price & ${x.channel === "fba" ? "FBA" : "MF"}</button>` : ""}</div>`}
       </div>`).join("") || `<div class="note" style="margin-top:12px">Nothing listed yet.</div>`}</div>`;
+  const find = sku => S.listed.find(x => x.sku === sku);
   $("#q").oninput = e => { LS.set("q", e.target.value); const p = e.target.selectionStart; renderListed(); const n = $("#q"); n.focus(); n.setSelectionRange(p, p); };
   $("#csv").onclick = exportCsv;
   $("#syncNow").onclick = e => { e.currentTarget.innerHTML = '<span class="spin"></span>'; sync(); };
+  if ($("#printToday")) $("#printToday").onclick = () => printAll(todays);
   document.querySelectorAll("[data-check]").forEach(b => b.onclick = async () => {
-    const entry = S.listed.find(x => x.sku === b.dataset.check); if (!entry) return;
-    b.disabled = true; b.innerHTML = '<span class="spin"></span> Checking';
-    await checkStatus(entry);
-    b.disabled = false; b.textContent = "Check on Amazon";
+    const entry = find(b.dataset.check); if (!entry) return;
+    b.disabled = true; b.innerHTML = '<span class="spin"></span>';
+    await checkStatus(entry); renderListed();
+  });
+  document.querySelectorAll("[data-print]").forEach(b => b.onclick = () => { const e = find(b.dataset.print); if (e) askAndPrint(e); });
+  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => { editing = b.dataset.edit; renderListed(); });
+  if ($("#eCancel")) $("#eCancel").onclick = () => { editing = null; renderListed(); };
+  if ($("#eSave")) $("#eSave").onclick = async e => {
+    const entry = find(editing); if (!entry) return;
+    const price = parseFloat($("#ePrice").value), note = $("#eNote").value.trim();
+    if (!(price > 0)){ toast("Enter a price"); return; }
+    const body = {sku: entry.sku, productType: entry.productType || undefined};
+    if (price !== entry.price) body.price = price;
+    if (note !== (entry.note || "")) body.note = note;
+    if (body.price == null && body.note == null){ editing = null; renderListed(); return; }
+    e.currentTarget.disabled = true; e.currentTarget.innerHTML = '<span class="spin"></span> Saving';
+    try {
+      const d = await api("/edit", {method: "POST", body: JSON.stringify(body)});
+      const errs = (d.issues || []).filter(i => i.severity === "ERROR");
+      if (d.status === "ACCEPTED" && !errs.length){
+        if (body.price != null) entry.price = price;
+        if (body.note != null) entry.note = note;
+        entry.editedAt = Date.now(); save(); syncSoon(); editing = null;
+        toast("Saved. Amazon updates it in a few minutes.");
+      } else toast("Amazon: " + ((errs[0] || (d.issues || [])[0] || {}).message || d.status));
+    } catch(err){ toast(err.status === 404 && err.message === "not found" ? "Update the Worker first" : err.message); }
+    renderListed();
+  };
+  document.querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+    const entry = find(b.dataset.del); if (!entry) return;
+    if (!confirm(`Delete ${entry.sku} from Amazon?\n${entry.title}\n\nThis removes the listing. It can't be undone.`)) return;
+    b.disabled = true; b.innerHTML = '<span class="spin"></span>';
+    try {
+      const d = await api("/delete", {method: "POST", body: JSON.stringify({sku: entry.sku})});
+      const errs = (d.issues || []).filter(i => i.severity === "ERROR");
+      if (d.status === "ACCEPTED" && !errs.length){
+        entry.deleted = true; entry.editedAt = Date.now(); watching.delete(entry.sku); save(); syncSoon();
+        toast("Deleted from Amazon");
+      } else toast("Amazon: " + ((errs[0] || (d.issues || [])[0] || {}).message || d.status));
+    } catch(err){
+      if (err.status === 404 && err.message !== "not found"){ entry.deleted = true; entry.editedAt = Date.now(); save(); syncSoon(); toast("It wasn't on Amazon. Removed here."); }
+      else toast(err.status === 404 ? "Update the Worker first" : err.message);
+    }
     renderListed();
   });
-  document.querySelectorAll("[data-print]").forEach(b => b.onclick = () => { const e = S.listed.find(x => x.sku === b.dataset.print); if (e) askAndPrint(e); });
   document.querySelectorAll("[data-fix]").forEach(b => b.onclick = async () => {
-    const entry = S.listed.find(x => x.sku === b.dataset.fix); if (!entry) return;
+    const entry = find(b.dataset.fix); if (!entry) return;
     b.disabled = true; b.innerHTML = '<span class="spin"></span> Sending';
-    await fixListing(entry);
+    await fixListing(entry); watch(entry);
     b.disabled = false; b.textContent = "Resend price & " + (entry.channel === "fba" ? "FBA" : "MF");
   });
 }
 function exportCsv(){
   const cols = ["date","sku","asin","code","title","channel","condition","price","cost","ticket","shelf","amazon_status"];
   const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const lines = [cols.join(",")].concat(S.listed.map(x => [new Date(x.at).toISOString(), x.sku, x.asin, x.code, x.title, x.channel, x.cond, x.price, x.cost, x.ticket, x.shelf, x.status ? x.status.label : ""].map(q).join(",")));
+  const lines = [cols.join(",")].concat(live().map(x => [new Date(x.at).toISOString(), x.sku, x.asin, x.code, x.title, x.channel, x.cond, x.price, x.cost, x.ticket, x.shelf, x.status ? x.status.label : ""].map(q).join(",")));
   const blob = new Blob([lines.join("\n")], {type: "text/csv"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "bethany-listed.csv"; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
@@ -836,10 +1023,11 @@ function renderSettings(){
     </div>
     <div class="note" style="margin-top:6px">The ticket goes up by one after each MF listing and skips numbers you've already used.</div>
 
-    <h2>FNSKU labels</h2>
+    <h2>Labels & MF tickets</h2>
     <label class="field">Label size<select id="sLabel">${Object.entries(LABELS).map(([k, v]) => `<option value="${k}" ${S.labelSize === k ? "selected" : ""}>${v.name}</option>`).join("")}</select></label>
     <div class="lblprev" id="lblPrev" style="width:max-content"></div>
-    <div class="row" style="margin-top:10px"><button class="mini" id="testPrint">Print a test label</button></div>
+    <div class="lblprev" id="tktPrev" style="width:max-content"></div>
+    <div class="row" style="margin-top:10px"><button class="mini" id="testPrint">Print a test label</button><button class="mini" id="testTicket">Print a test MF ticket</button></div>
 
     <h2>Condition notes</h2>
     ${CONDS.map(c => `<label class="field">${c.name}<textarea data-n="${c.id}" maxlength="1000">${esc(S.notes[c.id] || "")}</textarea></label>`).join("")}
@@ -856,10 +1044,12 @@ function renderSettings(){
   $("#sShelf").onchange = e => { S.shelf = e.target.value.trim() || S.shelf; save(); };
   document.querySelectorAll("[data-n]").forEach(t => t.onchange = e => { S.notes = {...S.notes, [t.dataset.n]: e.target.value}; save(); });
   const sample = {title: "Yoga for the Body, Mind and Soul", cond: "very_good"};
-  const prev = () => { $("#lblPrev").innerHTML = labelHTML(sample, "X00TEST123"); };
+  const sampleMf = {title: "Yoga for the Body, Mind and Soul", cond: "very_good", ticket: 12, shelf: "A1", price: 37.97, sku: "MF00012-VG-3.00"};
+  const prev = () => { $("#lblPrev").innerHTML = labelHTML(sample, "X00TEST123"); $("#tktPrev").innerHTML = ticketHTML(sampleMf); };
   prev();
   $("#sLabel").onchange = e => { S.labelSize = e.target.value; save(); prev(); };
   $("#testPrint").onclick = () => printLabels(sample, "X00TEST123", 1);
+  $("#testTicket").onclick = () => printSheet([ticketHTML(sampleMf)]);
   $("#test").onclick = async () => {
     S.worker = $("#sWorker").value.trim(); S.key = $("#sKey").value.trim(); save();
     const out = $("#testRes"); out.innerHTML = '<span class="spin"></span> Testing…';
@@ -885,7 +1075,12 @@ render();
 const start = new URLSearchParams(location.search).get("code");
 if (!S.key){ tab = "settings"; render(); toast("Enter your app key to connect"); }
 else if (start) lookup(start);
-if (S.key) sync();
+if (S.key){
+  sync();
+  // keep watching recent listings that still need an FNSKU or price after the app was closed
+  const dayAgo = Date.now() - 864e5;
+  live().filter(x => x.at > dayAgo && (!(x.status && "price" in x.status && x.status.price != null) || (x.channel === "fba" && !(x.status && x.status.fnsku)))).forEach(watch);
+}
 document.addEventListener("visibilitychange", () => { if (!document.hidden && S.key) sync(); });
 </script>
 </body>
