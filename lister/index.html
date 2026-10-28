@@ -254,7 +254,9 @@ function mapCatalog(x){
     format: sum.websiteDisplayGroupName || "",
     img: (x.images && x.images[0] && x.images[0].images && x.images[0].images[0] && x.images[0].images[0].link) || "",
     productType: (x.productTypes && x.productTypes[0] && x.productTypes[0].productType) || null,
-    rank: (() => { const r = (x.salesRanks || [])[0] || {}; const d = (r.displayGroupRanks || [])[0] || (r.classificationRanks || [])[0]; return d ? d.rank : null; })()
+    rank: (() => { const r = (x.salesRanks || [])[0] || {}; const d = (r.displayGroupRanks || [])[0] || (r.classificationRanks || [])[0]; return d ? d.rank : null; })(),
+    // package weight from Amazon's catalog: some listings need it ("Package Weight Unit is required")
+    pkgWeight: (() => { const d = (x.dimensions || [])[0] || {}; const w = (d.package && d.package.weight) || (d.item && d.item.weight); return w && w.value > 0 ? {value: +Number(w.value).toFixed(2), unit: String(w.unit || "pounds").toLowerCase()} : null; })()
   };
 }
 // Typed words (not an ISBN/UPC/ASIN) = title search: show the matches to pick from
@@ -408,7 +410,7 @@ function nextTicket(){ do { S.ticket++; } while (ticketTaken(S.ticket)); }
 function snapshot(){
   return {code: item.code, asin: item.asin, title: item.title, img: item.img || "", productType: item.productType || null,
     cond: S.cond, channel: S.channel, price: parseFloat(item.price), cost: parseFloat(item.cost) || 0, note: (item.note || "").trim(),
-    qty: Math.max(1, parseInt(item.qty) || 1), source: (item.source || "").trim(), sku: item.sku, rank: item.rank || null,
+    qty: Math.max(1, parseInt(item.qty) || 1), source: (item.source || "").trim(), sku: item.sku, rank: item.rank || null, pkgWeight: item.pkgWeight || null,
     fees: item.fees != null && item.feesFor === parseFloat(item.price) ? item.fees : null,
     ticket: S.channel === "mf" ? S.ticket : null, shelf: S.channel === "mf" ? S.shelf : null};
 }
@@ -424,7 +426,8 @@ async function listOne(sn){
   try {
     const d = await api("/list", {method: "POST", body: JSON.stringify({
       sku: sn.sku, asin: sn.asin, productType: sn.productType || undefined, condition: sn.cond, note: sn.note, price: sn.price,
-      fba: sn.channel === "fba", qty: sn.channel === "mf" ? sn.qty : undefined})});
+      fba: sn.channel === "fba", qty: sn.channel === "mf" ? sn.qty : undefined,
+      attributes: sn.pkgWeight ? {item_package_weight: {value: sn.pkgWeight.value, unit: sn.pkgWeight.unit}} : undefined})});
     const errs = (d.issues || []).filter(i => i.severity === "ERROR");
     if (d.status === "ACCEPTED" && !errs.length){
       const entry = {at: Date.now(), sku: sn.sku, asin: sn.asin, productType: sn.productType, code: sn.code, title: sn.title,
