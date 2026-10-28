@@ -252,7 +252,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-26l";
+const APP_VERSION = "2026-10-27a";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -289,7 +289,11 @@ const S = {
   autoOffers: LS.get("autoOffers", false),
   cont:     LS.get("cont", false),         // continuous scan
   camMode:  LS.get("camMode", "barcode"),
-  sound:    LS.get("sound", "beep"),       // beep | voice | off  // barcode | text (live ISBN reading)
+  sound:    LS.get("sound", "beep"),       // beep | voice | off
+  // Amazon live offers through your own Cloudflare relay (same one Bethany Lister uses) = 0 Keepa tokens
+  amzWorker: LS.get("amzWorker", (() => { try { return JSON.parse(localStorage.getItem("bl_worker")) || ""; } catch(e){ return ""; } })() || "https://bethanylister.wickedgoodproducts.workers.dev"),
+  amzKey:    LS.get("amzKey", (() => { try { return JSON.parse(localStorage.getItem("bl_key")) || ""; } catch(e){ return ""; } })()),
+  amzOn:     LS.get("amzOn", true),  // barcode | text (live ISBN reading)
   ladder:   LS.get("ladder", true),        // triggers fall through to slower tiers
   roi:      LS.get("roi", {minProfit:5, minRoi:50, maxRank:6000000, minPulse:6}), // live offers cost ~12 tokens per scan
   history:  LS.get("history", []),
@@ -306,7 +310,7 @@ if (!LS.get("addedSlow", false)){
   }
   LS.set("addedSlow", true); LS.set("triggers", S.triggers);
 }
-function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","sound","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","sound","amzWorker","amzKey","amzOn","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
 
 /* ============ helpers ============ */
 const $ = s => document.querySelector(s);
@@ -368,7 +372,7 @@ async function lookup(raw){
     announce(current.calc);
     offTab = null;
     busy = false; renderScan();
-    if (S.autoOffers || cachedOffers(current.product.asin)) loadOffers(false);
+    if (useAmazon() || S.autoOffers || cachedOffers(current.product.asin)) loadOffers(false);
     return {ok:true};
   }catch(e){
     if (ctl !== lookupCtl) return {ok:false, stale:true};   // a newer scan replaced this one
@@ -406,16 +410,56 @@ function parseOffers(p){
   return out.sort((a,b) => a.total - b.total);
 }
 const OFFER_TTL = 2*3600e3;
+const useAmazon = () => !!(S.amzOn && S.amzWorker && S.amzKey);
+async function amzApi(path){
+  let r;
+  try { r = await fetch(S.amzWorker.replace(/\/+$/, "") + path, {headers:{"x-app-key": S.amzKey}, cache:"no-store"}); }
+  catch(e){ throw new Error("Can't reach your Amazon relay. Check your connection."); }
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 401) throw new Error("Wrong Amazon app key. Use the same one as Bethany Lister (Settings).");
+  if (r.status === 429) { const e = new Error("Amazon busy"); e.retry = true; throw e; }
+  if (!r.ok) throw new Error(d.error || (d.errors && d.errors[0] && d.errors[0].message) || ("Amazon error " + r.status));
+  return d;
+}
+const AMZ_COND = {new:1, mint:2, like_new:2, very_good:3, good:4, acceptable:5};
+function parseAmzOffers(d, kind){
+  return ((d.payload && d.payload.Offers) || []).map(o => {
+    const price = (o.ListingPrice && o.ListingPrice.Amount) || 0, ship = (o.Shipping && o.Shipping.Amount) || 0;
+    const sub = String(o.SubCondition || "").toLowerCase(), cond = kind === "New" ? 1 : (AMZ_COND[sub] || 4);
+    return {price, ship, total:+(price+ship).toFixed(2), cond, condLabel:COND[cond] || "Used", fba:!!o.IsFulfilledByAmazon,
+      prime:!!(o.PrimeInformation && o.PrimeInformation.IsPrime), amazon:o.SellerId === "ATVPDKIKX0DER", bb:!!o.IsBuyBoxWinner,
+      used:cond >= 2 && cond <= 5, isNew:cond === 1};
+  });
+}
+async function amzOffers(asin){
+  // Amazon allows about one offers call every 2 seconds, so ask for your condition first, then the other
+  const first = S.cond === "new" ? "New" : "Used", second = first === "New" ? "Used" : "New";
+  const get = async kind => { try { return parseAmzOffers(await amzApi(`/offers?asin=${asin}&itemCondition=${kind}`), kind); }
+    catch(e){ if (!e.retry) throw e; await new Promise(r => setTimeout(r, 2100)); return parseAmzOffers(await amzApi(`/offers?asin=${asin}&itemCondition=${kind}`), kind); } };
+  const a = await get(first);
+  await new Promise(r => setTimeout(r, 2100));
+  let b = []; try { b = await get(second); } catch(e){ /* keep the first list */ }
+  return a.concat(b).sort((x, y) => x.total - y.total);
+}
 function cachedOffers(asin){
   const c = LS.get("offers."+asin, null);
   return c && Date.now() - c.t < OFFER_TTL ? c : null;
 }
-async function loadOffers(force){
+async function loadOffers(force, viaKeepa){
   if (!current || current.offersLoading) return;
   const asin = current.product.asin, mine = current;
   const hit = !force && cachedOffers(asin);
   if (hit){ mine.offers = hit.list; mine.offersAt = hit.t; mine.calc = calc(mine.product, mine.cost); renderScan(); return; }
   mine.offersLoading = true; mine.offersErr = null; renderScan();
+  if (useAmazon() && !viaKeepa){
+    try{
+      mine.offers = await amzOffers(asin); mine.offersAt = Date.now(); mine.offersFrom = "Amazon";
+      LS.set("offers."+asin, {t:mine.offersAt, list:mine.offers});
+    }catch(e){ mine.offersErr = e.message; mine.offersErrAmz = true; }
+    mine.offersLoading = false; save();
+    if (current === mine){ current.calc = calc(current.product, current.cost); renderScan(); }
+    return;
+  }
   const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 20000);
   try{
     const params = new URLSearchParams({key:S.key, domain:"1", asin, offers:"40", "only-live-offers":"1", history:"0", stats:"0", _:String(Date.now())});
@@ -427,7 +471,7 @@ async function loadOffers(force){
     if (j.error) throw new Error(j.error.message || j.error.type);
     const p = (j.products||[])[0];
     if (!p) throw new Error("No offer data for this item.");
-    mine.offers = parseOffers(p); mine.offersAt = Date.now();
+    mine.offers = parseOffers(p); mine.offersAt = Date.now(); mine.offersFrom = "Keepa";
     LS.set("offers."+asin, {t:mine.offersAt, list:mine.offers});
   }catch(e){
     mine.offersErr = ctl.signal.aborted ? "Keepa didn't answer within 20 seconds." : e.message;
@@ -452,10 +496,10 @@ function offersHTML(){
   const sellbar = `<div class="sellbar"><span class="amt num">${money(c.sell)}</span><span class="note">sell price</span>
     ${current.pick != null ? `<span class="src">YOUR PICK</span><button class="mini" id="clearPick">Auto</button>`
       : sellOffer ? `<span class="src">FBA ${sellOffer.total.toFixed(2)} · ${short(sellOffer.cond)}</span>` : `<span class="src">${esc(c.sellSrc).toUpperCase()}</span>`}
-    ${o ? `<span class="note" style="margin-left:auto">${current.offersAt ? Math.max(0,Math.round((Date.now()-current.offersAt)/60000)) + "m old" : ""}</span><button class="mini" id="reOff">Refresh</button>` : '<span class="note" style="margin-left:auto">from Keepa stats</span>'}</div>`;
+    ${o ? `<span class="note" style="margin-left:auto">${current.offersFrom === "Amazon" ? "Amazon · " : ""}${current.offersAt ? Math.max(0,Math.round((Date.now()-current.offersAt)/60000)) + "m old" : ""}</span><button class="mini" id="reOff">Refresh</button>` : '<span class="note" style="margin-left:auto">from Keepa stats</span>'}</div>`;
   let body;
-  if (current.offersLoading) body = `<div class="empty" style="padding:16px">Loading live offers…</div>`;
-  else if (current.offersErr) body = `<div class="err" style="margin:8px">${esc(current.offersErr)}</div>`;
+  if (current.offersLoading) body = `<div class="empty" style="padding:16px">${useAmazon() ? "Getting live offers from Amazon…" : "Loading live offers…"}</div>`;
+  else if (current.offersErr) body = `<div class="err" style="margin:8px">${esc(current.offersErr)}</div>${current.offersErrAmz ? `<div style="padding:0 8px 8px;display:flex;gap:8px"><button class="mini" id="reOff">Try Amazon again</button><button class="mini" id="keepaOff">Use Keepa (≈6 tokens/10 offers)</button></div>` : ""}`;
   else if (!o){
     // free: lowest price per condition from the stats the scan already paid for
     let marked = false;
@@ -469,7 +513,7 @@ function offersHTML(){
     body = `<div class="offcols"><div class="offcol">${usedCol}</div><div class="offcol">${newCol}</div><div class="offcol">${bbCol}</div></div>
       <div class="empty" style="padding:10px 12px;text-align:left;display:flex;gap:10px;align-items:center">
         <span class="note" style="flex:1">Tap any price to sell at it.</span>
-        <button class="mini" id="loadOff">Full live list (≈6 tokens per 10 offers)</button></div>`;
+        <button class="mini" id="loadOff">${useAmazon() ? "Live offers from Amazon (free)" : "Full live list (≈6 tokens per 10 offers)"}</button></div>`;
   }
   else {
     let marked = false;
@@ -775,6 +819,7 @@ function wireScan(){
   });
   const cp = $("#clearPick"); if (cp) cp.onclick = () => { current.pick = null; current.calc = calc(current.product, current.cost); renderScan(); };
   const ro = $("#reOff"); if (ro) ro.onclick = () => loadOffers(true);
+  const ko = $("#keepaOff"); if (ko) ko.onclick = () => loadOffers(true, true);
   $("#clearRes").onclick = () => { current=null; renderScan(); setTimeout(()=>$("#q").focus(),0); };
   $("#addInv").onclick = () => {
     const p=current.product, c=current.calc;
@@ -1547,6 +1592,13 @@ function renderSettings(){
     <div class="row" style="margin-top:8px"><button class="mini" id="tokBtn">Check tokens</button><span class="note grow" id="tokOut"></span></div>
     <div class="row" style="margin-top:10px"><span class="grow">Buy box prices (+2 tokens)</span><label class="switch"><input type="checkbox" id="bb" ${S.buybox?"checked":""}><span></span></label></div>
   </div>
+  <div class="card"><div class="label" style="margin-bottom:8px">Amazon live offers (free)</div>
+    <div class="note" style="margin-bottom:8px">Uses your Bethany Lister relay, so live offers cost 0 Keepa tokens and load after every scan.</div>
+    <div class="row"><span class="grow">Get offers from Amazon</span><label class="switch"><input type="checkbox" id="amzOn" ${S.amzOn?"checked":""}><span></span></label></div>
+    <div class="field" style="margin-top:8px">Relay (Worker) URL<input id="amzWorker" value="${esc(S.amzWorker)}" autocapitalize="off" autocomplete="off"></div>
+    <div class="field" style="margin-top:8px">App key (same as Bethany Lister)<input id="amzKey" type="password" value="${esc(S.amzKey)}" autocapitalize="off" autocomplete="off" placeholder="Paste your APP_KEY"></div>
+    <div class="row" style="margin-top:8px"><button class="mini" id="amzTest">Test</button><span class="note grow" id="amzOut"></span></div>
+  </div>
   <div class="card"><div class="label" style="margin-bottom:8px">Costs</div>
     <div class="trig-grid">
       <label>Inbound ship $/lb<input id="inb" inputmode="decimal" value="${S.inbound}"></label>
@@ -1599,6 +1651,15 @@ function renderSettings(){
   $("#key").onchange = e => { S.key = e.target.value.trim(); save(); toast("Key saved"); };
   $("#bb").onchange = e => { S.buybox = e.target.checked; save(); };
   $("#ao").onchange = e => { S.autoOffers = e.target.checked; save(); };
+  $("#amzOn").onchange = e => { S.amzOn = e.target.checked; save(); };
+  $("#amzWorker").onchange = e => { S.amzWorker = e.target.value.trim(); save(); };
+  $("#amzKey").onchange = e => { S.amzKey = e.target.value.trim(); save(); toast("Amazon key saved"); };
+  $("#amzTest").onclick = async () => {
+    S.amzWorker = $("#amzWorker").value.trim(); S.amzKey = $("#amzKey").value.trim(); save();
+    $("#amzOut").textContent = "Checking…";
+    try { const d = await amzApi("/offers?asin=0316769487&itemCondition=Used"); const n = ((d.payload && d.payload.Offers) || []).length; $("#amzOut").textContent = `Working ✓ (${n} offers on a test book)`; }
+    catch(e){ $("#amzOut").textContent = e.message; }
+  };
   $("#snd").onchange = e => { S.sound = e.target.value; save(); announce({buy:true, profit:12}); };
   $("#sndTest").onclick = () => { unlockAudio(); announce({buy:true, profit:12}); setTimeout(() => announce({buy:false, profit:1}), 1500); };
   $("#lad").onchange = e => { S.ladder = e.target.checked; save(); };
