@@ -258,7 +258,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-28c";
+const APP_VERSION = "2026-10-28d";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -765,10 +765,7 @@ function renderScanInner(err){
 // Buyback sites: they don't share prices with other apps, so tapping copies the ISBN and opens the site to paste it.
 // BookScouter takes the ISBN in the link and lists live quotes from many buyback vendors.
 const BUYBACK = [
-  {short:"WOB", name:"World of Books", url:"https://sell.worldofbooks.com/en-us/sell-books-online", paste:true},
-  {short:"BR",  name:"BooksRun",       url:"https://booksrun.com/", paste:true},
-  {short:"MAX", name:"MaxX Access item checker", url:"https://www.getmaxxaccess.com/gate-checker", paste:true, asin:true},   // consignment for gated items
-  {short:"BookScouter", name:"BookScouter", url:"https://bookscouter.com/book/{isbn}", paste:false}
+  {short:"MAX", name:"MaxX Access item checker", url:"https://www.getmaxxaccess.com/gate-checker", paste:true, asin:true}   // consignment for gated items
 ];
 function bookIsbn(){
   const p = current.product, c = String(current.code || "").replace(/[^0-9X]/gi, "");
@@ -781,7 +778,7 @@ function buybackHTML(){
   if (!current.calc.isBook && !gated) return "";
   const list = BUYBACK.map((b, i) => [b, i]).filter(([b]) => b.asin || (current.calc.isBook && isbn));
   if (!list.length) return "";
-  return `<div class="buyback"><span class="label">Buyback</span>${list.map(([b, i]) =>
+  return `<div class="buyback"><span class="label">Consign</span>${list.map(([b, i]) =>
     `<a class="chip${b.asin && gated ? " acc" : ""}" data-bb="${i}" target="_blank" rel="noopener" title="${esc(b.name)}" href="${b.url.replace("{isbn}", isbn)}">${esc(b.short)} ↗</a>`).join("")}${gated ? `<span class="note">Gated? MAX sells it for you (50/50)</span>` : ""}</div>`;
 }
 function gateBadge(){
