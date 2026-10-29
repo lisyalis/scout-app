@@ -1117,7 +1117,9 @@ function renderListed(){
         : `<div class="row" style="margin-top:8px;flex-wrap:wrap">
           <button class="mini" data-check="${esc(x.sku)}">Check</button>
           <button class="mini" data-print="${esc(x.sku)}">${x.channel === "fba" ? "Print label" : "Print ticket"}</button>
-          <button class="mini" data-edit="${esc(x.sku)}" ${!x.cost ? 'style="border-color:var(--accent);color:var(--accent)"' : ""}>${!x.cost ? "Add cost" : "Edit"}</button>
+          <button class="mini" data-edit="${esc(x.sku)}" data-focus="eCost" ${!x.cost ? 'style="border-color:var(--accent);color:var(--accent)"' : ""}>${!x.cost ? "Add cost" : "Cost " + money(x.cost)}</button>
+          <button class="mini" data-edit="${esc(x.sku)}" data-focus="ePrice">Price ${money(x.price)}</button>
+          <button class="mini" data-edit="${esc(x.sku)}" data-focus="eNote">Edit</button>
           <a class="mini" style="text-decoration:none;color:var(--fg)" target="_blank" rel="noopener" href="${scLink(x)}">Seller Central</a>
           <button class="mini" data-del="${esc(x.sku)}" style="color:var(--skip)">Delete</button>
           ${x.status && "price" in x.status && x.status.price == null ? `<button class="mini" data-fix="${esc(x.sku)}" style="border-color:var(--accent);color:var(--accent)">Resend price & ${x.channel === "fba" ? "FBA" : "MF"}</button>` : ""}</div>`}
@@ -1133,7 +1135,10 @@ function renderListed(){
     await checkStatus(entry); renderListed();
   });
   document.querySelectorAll("[data-print]").forEach(b => b.onclick = () => { const e = find(b.dataset.print); if (e) askAndPrint(e); });
-  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => { editing = b.dataset.edit; renderListed(); });
+  document.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => {
+    editing = b.dataset.edit; renderListed();
+    const f = document.getElementById(b.dataset.focus || "ePrice"); if (f){ f.focus(); if (f.select) f.select(); }
+  });
   if ($("#eCancel")) $("#eCancel").onclick = () => { editing = null; renderListed(); };
   if ($("#eSave")) $("#eSave").onclick = async e => {
     const entry = find(editing); if (!entry) return;
