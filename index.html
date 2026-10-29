@@ -258,7 +258,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-28e";
+const APP_VERSION = "2026-10-28f";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -625,6 +625,11 @@ function calc(p, cost){
     if (fba.length){ sell = fba[0].total; sellSrc = "lowest FBA"; }
     const nf = offs.find(x => x.fba && x.isNew); if (nf) newFBA = nf.total;
   }
+  // no buy box and no FBA offer: a lone merchant-fulfilled price can be a wild outlier, so cap it at the 6-month average
+  const noBB = S.cond === "used" ? pr.usedBB == null : pr.newBB == null;
+  const anyFBA = offs ? offs.some(x => x.fba && (S.cond === "used" ? x.used : x.isNew)) : (S.cond === "new" && pr.newFBA != null);
+  const avg = S.cond === "used" ? pr.histUsed : pr.histNew;
+  if (noBB && !anyFBA && sell != null && avg != null && sell > avg){ sell = avg; sellSrc = "capped at 6-mo avg"; }
   // buyers won't pay more for used than for a new Prime copy
   if (S.cond === "used" && sell != null && newFBA != null && newFBA < sell){ sell = newFBA; sellSrc = "capped at new FBA"; }
   // an offer you tapped becomes the sell price
@@ -777,10 +782,14 @@ function maxxEstimate(){
   const want = x => S.cond === "new" ? x.isNew : x.used;
   let price = null, from = "";
   if (o){ const f = o.filter(x => x.fba && want(x)); if (f.length){ price = f[0].total; from = "lowest FBA"; } }
-  if (price == null){ price = S.cond === "new" ? (pr.newFBA ?? pr.newBB) : (pr.usedBB ?? c.sell); from = S.cond === "new" ? "new FBA" : "used buy box"; }
-  if (!(price > 0)) return null;
-  const fees = price*c.refPct + c.closing + c.fbaFee + c.lbs*S.inbound;
-  return {payout: Math.max(0, (price - fees)/2), price, fees, from};
+  if (price == null){ price = S.cond === "new" ? (pr.newFBA ?? pr.newBB) : pr.usedBB; from = S.cond === "new" ? "new FBA" : "used buy box"; }
+  // MaxX prices against FBA, never against merchant-fulfilled listings, and turns down items that won't sell
+  if (!pr.rank) return {no:"no sales rank"};
+  if (!(price > 0)) return {no:"no FBA price to sell against"};
+  if (pr.rank > 3000000 || pr.pulse < 3) return {no:`slow seller (${pr.pulse} sales in 6m)`};
+  const fees = price*c.refPct + c.closing + c.fbaFee + c.lbs*S.inbound, payout = (price - fees)/2;
+  if (payout < 1) return {no:"payout under $1"};
+  return {payout, price, fees, from};
 }
 function bookIsbn(){
   const p = current.product, c = String(current.code || "").replace(/[^0-9X]/gi, "");
@@ -795,7 +804,7 @@ function buybackHTML(){
   const mx = maxxEstimate();
   if (!list.length) return "";
   return `<div class="buyback"><span class="label">Consign</span>${list.map(([b, i]) =>
-    `<a class="chip${b.asin && gated ? " acc" : ""}" data-bb="${i}" target="_blank" rel="noopener" title="${esc(b.name)}" href="${b.url.replace("{isbn}", isbn)}">${esc(b.short)}${b.asin && mx ? ` <span class="num" style="color:var(--buy)">${money(mx.payout)}</span>` : ""} ↗</a>`).join("")}${mx ? `<span class="note">est. payout: ${money(mx.price)} ${esc(mx.from)} − ${money(mx.fees)} fees, ÷ 2${gated ? " · sells gated items for you" : ""}</span>` : ""}</div>`;
+    `<a class="chip${b.asin && gated ? " acc" : ""}" data-bb="${i}" target="_blank" rel="noopener" title="${esc(b.name)}" href="${b.url.replace("{isbn}", isbn)}">${esc(b.short)}${b.asin && mx ? (mx.no ? ` <span class="num" style="color:var(--muted)">—</span>` : ` <span class="num" style="color:var(--buy)">${money(mx.payout)}</span>`) : ""} ↗</a>`).join("")}${mx ? `<span class="note">${mx.no ? "Likely not worth sending: " + esc(mx.no) : `est. payout: ${money(mx.price)} ${esc(mx.from)} − ${money(mx.fees)} fees, ÷ 2${gated ? " · sells gated items for you" : ""}`}</span>` : ""}</div>`;
 }
 function gateBadge(){
   const g = current.gate;
