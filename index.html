@@ -258,7 +258,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-28b";
+const APP_VERSION = "2026-10-28c";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -767,7 +767,7 @@ function renderScanInner(err){
 const BUYBACK = [
   {short:"WOB", name:"World of Books", url:"https://sell.worldofbooks.com/en-us/sell-books-online", paste:true},
   {short:"BR",  name:"BooksRun",       url:"https://booksrun.com/", paste:true},
-  {short:"MAX", name:"Maxx Access",    url:"https://getmaxxaccess.com/", paste:true},
+  {short:"MAX", name:"MaxX Access item checker", url:"https://www.getmaxxaccess.com/gate-checker", paste:true, asin:true},   // consignment for gated items
   {short:"BookScouter", name:"BookScouter", url:"https://bookscouter.com/book/{isbn}", paste:false}
 ];
 function bookIsbn(){
@@ -777,10 +777,12 @@ function bookIsbn(){
   return /^[0-9]{9}[0-9X]$/.test(p.asin) ? p.asin : "";
 }
 function buybackHTML(){
-  if (!current.calc.isBook) return "";
-  const isbn = bookIsbn(); if (!isbn) return "";
-  return `<div class="buyback"><span class="label">Buyback</span>${BUYBACK.map((b, i) =>
-    `<a class="chip" data-bb="${i}" target="_blank" rel="noopener" title="${esc(b.name)}" href="${b.url.replace("{isbn}", isbn)}">${esc(b.short)} ↗</a>`).join("")}</div>`;
+  const isbn = bookIsbn(), gated = current.gate === "bad";
+  if (!current.calc.isBook && !gated) return "";
+  const list = BUYBACK.map((b, i) => [b, i]).filter(([b]) => b.asin || (current.calc.isBook && isbn));
+  if (!list.length) return "";
+  return `<div class="buyback"><span class="label">Buyback</span>${list.map(([b, i]) =>
+    `<a class="chip${b.asin && gated ? " acc" : ""}" data-bb="${i}" target="_blank" rel="noopener" title="${esc(b.name)}" href="${b.url.replace("{isbn}", isbn)}">${esc(b.short)} ↗</a>`).join("")}${gated ? `<span class="note">Gated? MAX sells it for you (50/50)</span>` : ""}</div>`;
 }
 function gateBadge(){
   const g = current.gate;
@@ -872,8 +874,8 @@ function wireScan(){
   cost.addEventListener("focus", () => cost.select());
   $("#chartBtn").onclick = () => openChart(current.product);
   document.querySelectorAll("[data-bb]").forEach(a => a.addEventListener("click", () => {
-    const b = BUYBACK[+a.dataset.bb], isbn = bookIsbn();
-    if (b.paste && isbn){ try { navigator.clipboard.writeText(isbn).then(() => toast("ISBN copied. Paste it on " + b.name)).catch(() => toast("ISBN " + isbn)); } catch(e){ toast("ISBN " + isbn); } }
+    const b = BUYBACK[+a.dataset.bb], code = b.asin ? current.product.asin : bookIsbn(), what = b.asin ? "ASIN" : "ISBN";
+    if (b.paste && code){ try { navigator.clipboard.writeText(code).then(() => toast(what + " copied. Paste it on " + b.name)).catch(() => toast(what + " " + code)); } catch(e){ toast(what + " " + code); } }
   }));
   document.querySelectorAll("[data-off]").forEach(b => b.onclick = () => { offTab = b.dataset.off; renderScan(); });
   const lo = $("#loadOff"); if (lo) lo.onclick = () => loadOffers(false);
