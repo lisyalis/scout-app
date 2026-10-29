@@ -1295,7 +1295,11 @@ async function waitOp(r){
     await sleep(i < 4 ? 1500 : 3000);
     const st = await spCall("GET", `${IB}/operations/${id}`);
     if (st.operationStatus === "SUCCESS") return st;
-    if (st.operationStatus === "FAILED") throw new Error([...new Set((st.operationProblems || []).map(p => p.message))].join(" ") || "Amazon couldn't finish this step.");
+    if (st.operationStatus === "FAILED"){
+      const probs = st.operationProblems || [];
+      const errs = probs.filter(p => p.severity !== "WARNING" && !/^WARNING/i.test(p.message || ""));
+      throw new Error([...new Set((errs.length ? errs : probs).map(p => p.message))].join(" ") || "Amazon couldn't finish this step.");
+    }
   }
   throw new Error("Amazon is taking a long time. Tap Continue to keep going.");
 }
@@ -1419,7 +1423,8 @@ async function runShipment(){
     if (!sh.done.transport){
       await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/transportationOptions`, {
         placementOptionId: sh.placementOptionId,
-        shipmentTransportationConfigurations: sh.shipmentIds.map(shipmentId => ({shipmentId, readyToShipWindow: {start: new Date().toISOString()}}))
+        // Amazon rejects a ready-to-ship time that's already past by the time it processes it, so use an hour from now
+        shipmentTransportationConfigurations: sh.shipmentIds.map(shipmentId => ({shipmentId, readyToShipWindow: {start: new Date(Date.now() + 3600e3).toISOString().replace(/\.\d{3}Z$/, "Z")}}))
       }));
       const lt = await spCall("GET", `${IB}/inboundPlans/${sh.planId}/transportationOptions?placementOptionId=${sh.placementOptionId}&pageSize=20`);
       const all = lt.transportationOptions || [];
