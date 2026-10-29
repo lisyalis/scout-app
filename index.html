@@ -72,6 +72,9 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .gate{display:inline-block;margin:4px auto 2px;padding:3px 9px;border-radius:6px;font:700 13px var(--display);letter-spacing:.08em;background:rgba(0,0,0,.25);color:inherit;text-decoration:none}
 .gate.ok{background:rgba(0,0,0,.18)}
 .gate.bad{background:#7f1d1d;color:#fff}
+.buyback{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
+.buyback .label{margin-right:2px}
+.buyback .chip{padding:5px 11px;font-size:13px}
 .target{font-size:12px;font-weight:600;opacity:.85;font-family:var(--mono)}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
 .tiles>div{padding:9px 6px;text-align:center;min-width:0}
@@ -255,7 +258,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-27b";
+const APP_VERSION = "2026-10-28a";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -759,6 +762,25 @@ function renderScanInner(err){
   $("#main").innerHTML = head + body + (err ? `<div class="err">${esc(err)}</div>` : "") + scanBar();
   wireScan();
 }
+// Buyback sites: they don't share prices with other apps, so tapping copies the ISBN and opens the site to paste it.
+// BookScouter takes the ISBN in the link and lists live quotes from many buyback vendors.
+const BUYBACK = [
+  {name:"World of Books", url:"https://sell.worldofbooks.com/en-us/sell-books-online", paste:true},
+  {name:"BooksRun",       url:"https://booksrun.com/", paste:true},
+  {name:"BookScouter",    url:"https://bookscouter.com/book/{isbn}", paste:false}
+];
+function bookIsbn(){
+  const p = current.product, c = String(current.code || "").replace(/[^0-9X]/gi, "");
+  if (/^97[89][0-9]{10}$/.test(c) || /^[0-9]{9}[0-9X]$/.test(c)) return c;
+  if (p.eanList && p.eanList.length) { const e = p.eanList.find(x => /^97[89]/.test(x)); if (e) return e; }
+  return /^[0-9]{9}[0-9X]$/.test(p.asin) ? p.asin : "";
+}
+function buybackHTML(){
+  if (!current.calc.isBook) return "";
+  const isbn = bookIsbn(); if (!isbn) return "";
+  return `<div class="buyback"><span class="label">Buyback</span>${BUYBACK.map((b, i) =>
+    `<a class="chip" data-bb="${i}" target="_blank" rel="noopener" href="${b.url.replace("{isbn}", isbn)}">${esc(b.name)}</a>`).join("")}</div>`;
+}
 function gateBadge(){
   const g = current.gate;
   if (!g) return "";
@@ -781,6 +803,7 @@ function resultHTML(){
     <div><div class="v num">${kfmt(pr.rank)}</div><small>RANK · ${kfmt(pr.avgRank)} avg 6m</small></div>
     <div><div class="v num">${pr.pulse}</div><small>SALES PULSE 6M</small></div>
   </div>
+  ${buybackHTML()}
   ${rangeHTML()}
   ${tilesHTML()}
   ${offersHTML()}
@@ -847,6 +870,10 @@ function wireScan(){
   cost.addEventListener("change", () => { current.cost = parseFloat(cost.value)||0; current.calc = calc(current.product, current.cost); renderScan(); });
   cost.addEventListener("focus", () => cost.select());
   $("#chartBtn").onclick = () => openChart(current.product);
+  document.querySelectorAll("[data-bb]").forEach(a => a.addEventListener("click", () => {
+    const b = BUYBACK[+a.dataset.bb], isbn = bookIsbn();
+    if (b.paste && isbn){ try { navigator.clipboard.writeText(isbn).then(() => toast("ISBN copied. Paste it on " + b.name)).catch(() => toast("ISBN " + isbn)); } catch(e){ toast("ISBN " + isbn); } }
+  }));
   document.querySelectorAll("[data-off]").forEach(b => b.onclick = () => { offTab = b.dataset.off; renderScan(); });
   const lo = $("#loadOff"); if (lo) lo.onclick = () => loadOffers(false);
   // tap an offer to use it as your sell price; tap it again (or Auto) to go back
