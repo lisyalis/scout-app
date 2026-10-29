@@ -74,7 +74,7 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .gate.bad{background:#7f1d1d;color:#fff}
 .buyback{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
 .buyback .label{margin-right:2px}
-.buyback .chip{padding:5px 11px;font-size:13px}
+.buyback .chip{padding:5px 11px;font:700 14px var(--display);letter-spacing:.06em}
 .target{font-size:12px;font-weight:600;opacity:.85;font-family:var(--mono)}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
 .tiles>div{padding:9px 6px;text-align:center;min-width:0}
@@ -258,7 +258,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-28a";
+const APP_VERSION = "2026-10-28b";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -765,9 +765,10 @@ function renderScanInner(err){
 // Buyback sites: they don't share prices with other apps, so tapping copies the ISBN and opens the site to paste it.
 // BookScouter takes the ISBN in the link and lists live quotes from many buyback vendors.
 const BUYBACK = [
-  {name:"World of Books", url:"https://sell.worldofbooks.com/en-us/sell-books-online", paste:true},
-  {name:"BooksRun",       url:"https://booksrun.com/", paste:true},
-  {name:"BookScouter",    url:"https://bookscouter.com/book/{isbn}", paste:false}
+  {short:"WOB", name:"World of Books", url:"https://sell.worldofbooks.com/en-us/sell-books-online", paste:true},
+  {short:"BR",  name:"BooksRun",       url:"https://booksrun.com/", paste:true},
+  {short:"MAX", name:"Maxx Access",    url:"https://getmaxxaccess.com/", paste:true},
+  {short:"BookScouter", name:"BookScouter", url:"https://bookscouter.com/book/{isbn}", paste:false}
 ];
 function bookIsbn(){
   const p = current.product, c = String(current.code || "").replace(/[^0-9X]/gi, "");
@@ -779,7 +780,7 @@ function buybackHTML(){
   if (!current.calc.isBook) return "";
   const isbn = bookIsbn(); if (!isbn) return "";
   return `<div class="buyback"><span class="label">Buyback</span>${BUYBACK.map((b, i) =>
-    `<a class="chip" data-bb="${i}" target="_blank" rel="noopener" href="${b.url.replace("{isbn}", isbn)}">${esc(b.name)}</a>`).join("")}</div>`;
+    `<a class="chip" data-bb="${i}" target="_blank" rel="noopener" title="${esc(b.name)}" href="${b.url.replace("{isbn}", isbn)}">${esc(b.short)} ↗</a>`).join("")}</div>`;
 }
 function gateBadge(){
   const g = current.gate;
