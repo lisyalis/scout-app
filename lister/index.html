@@ -1457,9 +1457,14 @@ async function runShipment(){
       sh.labelUrls = [];
       for (let k = 0; k < sh.confirmIds.length; k++){
         const cid = sh.confirmIds[k];
-        let n = sh.shipmentIds.length === 1 ? (sh.boxes || 1) : 1;
-        try { const bx = await spCall("GET", `${IB}/inboundPlans/${sh.planId}/shipments/${sh.shipmentIds[k]}/boxes`); if ((bx.boxes || []).length) n = bx.boxes.length; } catch(e){}
-        const r = await spCall("GET", `/fba/inbound/v0/shipments/${cid}/labels?PageType=${S.boxPage}&LabelType=UNIQUE&NumberOfPackages=${n}`);
+        // Amazon wants the box (carton) IDs for each label, e.g. FBA18XYZU000001
+        let ids = [];
+        try {
+          const bx = await spCall("GET", `${IB}/inboundPlans/${sh.planId}/shipments/${sh.shipmentIds[k]}/boxes?pageSize=100`);
+          ids = (bx.boxes || []).map(b => b.boxId).filter(Boolean);
+        } catch(e){}
+        if (!ids.length) throw new Error("Amazon hasn't assigned box IDs yet. Tap Continue in a minute.");
+        const r = await spCall("GET", `/fba/inbound/v0/shipments/${cid}/labels?PageType=${S.boxPage}&LabelType=UNIQUE&NumberOfPackages=${ids.length}&PackageLabelsToPrint=${encodeURIComponent(ids.join(","))}`);
         const url = r.payload && r.payload.DownloadURL;
         if (url) sh.labelUrls.push({cid, url});
       }
