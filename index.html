@@ -258,7 +258,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-28d";
+const APP_VERSION = "2026-10-28e";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -633,7 +633,10 @@ function calc(p, cost){
   const refPct = (p.referralFeePercentage ?? p.referralFeePercent ?? 15) / 100;
   const fbaFee = p.fbaFees && p.fbaFees.pickAndPackFee > 0 ? p.fbaFees.pickAndPackFee/100 : 3.50;
   const lbs = p.packageWeight > 0 ? p.packageWeight/453.6 : 1;
-  const closing = isBook ? 1.80 : 0;
+  // Amazon's $1.80 closing fee applies to all media: books, DVDs/Blu-ray, CDs/vinyl, video games, software
+  const MEDIA = [283155, 2625373011, 5174, 468642, 229534];
+  const isMedia = isBook || MEDIA.includes(p.rootCategory) || /^(DVD|Blu-ray|Audio CD|Vinyl|Video Game|Software|VHS Tape)/i.test(p.binding || "");
+  const closing = isMedia ? 1.80 : 0;
   let fees = null, profit = null;
   if (sell){
     fees = sell*refPct + closing + fbaFee + lbs*S.inbound + S.prep;
@@ -767,6 +770,18 @@ function renderScanInner(err){
 const BUYBACK = [
   {short:"MAX", name:"MaxX Access item checker", url:"https://www.getmaxxaccess.com/gate-checker", paste:true, asin:true}   // consignment for gated items
 ];
+// MaxX Access payout estimate, using their stated method: lowest FBA offer for the condition,
+// minus Amazon fees and inbound shipping, split 50/50 with you. Your buy cost isn't part of it.
+function maxxEstimate(){
+  const c = current.calc, pr = c.pr, o = current.offers;
+  const want = x => S.cond === "new" ? x.isNew : x.used;
+  let price = null, from = "";
+  if (o){ const f = o.filter(x => x.fba && want(x)); if (f.length){ price = f[0].total; from = "lowest FBA"; } }
+  if (price == null){ price = S.cond === "new" ? (pr.newFBA ?? pr.newBB) : (pr.usedBB ?? c.sell); from = S.cond === "new" ? "new FBA" : "used buy box"; }
+  if (!(price > 0)) return null;
+  const fees = price*c.refPct + c.closing + c.fbaFee + c.lbs*S.inbound;
+  return {payout: Math.max(0, (price - fees)/2), price, fees, from};
+}
 function bookIsbn(){
   const p = current.product, c = String(current.code || "").replace(/[^0-9X]/gi, "");
   if (/^97[89][0-9]{10}$/.test(c) || /^[0-9]{9}[0-9X]$/.test(c)) return c;
@@ -777,9 +792,10 @@ function buybackHTML(){
   const isbn = bookIsbn(), gated = current.gate === "bad";
   if (!current.calc.isBook && !gated) return "";
   const list = BUYBACK.map((b, i) => [b, i]).filter(([b]) => b.asin || (current.calc.isBook && isbn));
+  const mx = maxxEstimate();
   if (!list.length) return "";
   return `<div class="buyback"><span class="label">Consign</span>${list.map(([b, i]) =>
-    `<a class="chip${b.asin && gated ? " acc" : ""}" data-bb="${i}" target="_blank" rel="noopener" title="${esc(b.name)}" href="${b.url.replace("{isbn}", isbn)}">${esc(b.short)} ↗</a>`).join("")}${gated ? `<span class="note">Gated? MAX sells it for you (50/50)</span>` : ""}</div>`;
+    `<a class="chip${b.asin && gated ? " acc" : ""}" data-bb="${i}" target="_blank" rel="noopener" title="${esc(b.name)}" href="${b.url.replace("{isbn}", isbn)}">${esc(b.short)}${b.asin && mx ? ` <span class="num" style="color:var(--buy)">${money(mx.payout)}</span>` : ""} ↗</a>`).join("")}${mx ? `<span class="note">est. payout: ${money(mx.price)} ${esc(mx.from)} − ${money(mx.fees)} fees, ÷ 2${gated ? " · sells gated items for you" : ""}</span>` : ""}</div>`;
 }
 function gateBadge(){
   const g = current.gate;
