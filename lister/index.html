@@ -1295,13 +1295,14 @@ async function waitOp(r){
     await sleep(i < 4 ? 1500 : 3000);
     const st = await spCall("GET", `${IB}/operations/${id}`);
     if (st.operationStatus === "SUCCESS") return st;
-    if (st.operationStatus === "FAILED") throw new Error((st.operationProblems || []).map(p => p.message).join(" ") || "Amazon couldn't finish this step.");
+    if (st.operationStatus === "FAILED") throw new Error([...new Set((st.operationProblems || []).map(p => p.message))].join(" ") || "Amazon couldn't finish this step.");
   }
   throw new Error("Amazon is taking a long time. Tap Continue to keep going.");
 }
 
 // ---------- Ship: FBA shipments ----------
 const SHIP_STEPS = [
+  ["prep", "Set prep info (books: no prep needed)"],
   ["plan", "Create the shipment plan"],
   ["packing", "Choose how Amazon wants it packed"],
   ["boxes", "Send box size, weight and contents"],
@@ -1316,7 +1317,7 @@ function shipLog(msg){ S.ship.log = (S.ship.log || []).concat([{at: Date.now(), 
 async function startShipment(skus){
   const f = S.shipFrom;
   if (!f.name || !f.address1 || !f.city || !f.state || !f.zip || !f.phone){ toast("Add your ship-from address in Settings first"); tab = "settings"; render(); return; }
-  S.ship = {at: Date.now(), skus, step: "plan", done: {}, box: {...S.box}, log: []};
+  S.ship = {at: Date.now(), skus, step: "prep", done: {}, box: {...S.box}, log: []};
   save(); runShipment();
 }
 async function runShipment(){
@@ -1324,6 +1325,30 @@ async function runShipment(){
   shipBusy = true; S.ship.error = null; renderShipSoon();
   const sh = S.ship;
   try {
+    // Amazon needs a prep category for every SKU once. Books need no prep: category NONE, ITEM_NO_PREP.
+    if (!sh.done.prep){
+      const qs = sku => `marketplaceId=${MKT}&` + sku.map(m => "mskus=" + encodeURIComponent(m)).join("&");
+      const chunks = []; for (let i = 0; i < sh.skus.length; i += 100) chunks.push(sh.skus.slice(i, i + 100));
+      const read = async () => { const out = []; for (const c of chunks){ const r = await spCall("GET", `${IB}/items/prepDetails?${qs(c)}`); out.push(...(r.mskuPrepDetails || [])); } return out; };
+      let details = await read();
+      const missing = sh.skus.filter(m => { const d = details.find(x => x.msku === m); return !d || !d.prepCategory || d.prepCategory === "UNKNOWN"; });
+      if (missing.length){
+        for (let i = 0; i < missing.length; i += 100){
+          await waitOp(await spCall("POST", `${IB}/items/prepDetails`, {marketplaceId: MKT,
+            mskuPrepDetails: missing.slice(i, i + 100).map(msku => ({msku, prepCategory: "NONE", prepTypes: ["ITEM_NO_PREP"]}))}));
+        }
+        details = await read();
+      }
+      // use the prep/label owners Amazon allows for each SKU
+      const own = c => c === "AMAZON_ONLY" ? "AMAZON" : c === "SELLER_ONLY" ? "SELLER" : c === "NONE_ONLY" ? "NONE" : null;
+      sh.owners = {};
+      for (const m of sh.skus){
+        const d = details.find(x => x.msku === m) || {};
+        const all = own(d.allOwnersConstraint);
+        sh.owners[m] = {prep: all || own(d.prepOwnerConstraint) || "NONE", label: all || own(d.labelOwnerConstraint) || "SELLER"};
+      }
+      sh.done.prep = true; sh.step = "plan"; shipLog("Prep set for " + missing.length + " SKU(s)"); save(); renderShipSoon();
+    }
     if (!sh.done.plan){
       const f = S.shipFrom;
       const r = await spCall("POST", `${IB}/inboundPlans`, {
@@ -1331,7 +1356,8 @@ async function runShipment(){
         destinationMarketplaces: [MKT],
         sourceAddress: {name: f.name, addressLine1: f.address1, ...(f.address2 ? {addressLine2: f.address2} : {}), city: f.city,
           stateOrProvinceCode: f.state.toUpperCase(), postalCode: f.zip, countryCode: "US", phoneNumber: f.phone},
-        items: sh.skus.map(msku => ({msku, quantity: (S.listed.find(x => x.sku === msku) || {}).qty || 1, prepOwner: "NONE", labelOwner: "SELLER"})),
+        items: sh.skus.map(msku => ({msku, quantity: (S.listed.find(x => x.sku === msku) || {}).qty || 1,
+          prepOwner: (sh.owners && sh.owners[msku] && sh.owners[msku].prep) || "NONE", labelOwner: (sh.owners && sh.owners[msku] && sh.owners[msku].label) || "SELLER"})),
       });
       sh.planId = r.inboundPlanId; save();
       await waitOp(r);
