@@ -1345,11 +1345,13 @@ async function runShipment(){
       for (const m of sh.skus){
         const d = details.find(x => x.msku === m) || {};
         const all = own(d.allOwnersConstraint);
-        sh.owners[m] = {prep: all || own(d.prepOwnerConstraint) || "NONE", label: all || own(d.labelOwnerConstraint) || "SELLER"};
+        // you prep and label your own books unless Amazon says otherwise
+        sh.owners[m] = {prep: all || own(d.prepOwnerConstraint) || "SELLER", label: all || own(d.labelOwnerConstraint) || "SELLER"};
       }
       sh.done.prep = true; sh.step = "plan"; shipLog("Prep set for " + missing.length + " SKU(s)"); save(); renderShipSoon();
     }
     if (!sh.done.plan){
+     for (let attempt = 0; attempt < 3 && !sh.done.plan; attempt++){
       const f = S.shipFrom;
       const r = await spCall("POST", `${IB}/inboundPlans`, {
         name: "Bethany " + new Date().toLocaleDateString(),
@@ -1360,8 +1362,21 @@ async function runShipment(){
           prepOwner: (sh.owners && sh.owners[msku] && sh.owners[msku].prep) || "NONE", labelOwner: (sh.owners && sh.owners[msku] && sh.owners[msku].label) || "SELLER"})),
       });
       sh.planId = r.inboundPlanId; save();
-      await waitOp(r);
+      try { await waitOp(r); }
+      catch(err){
+        // Amazon says which owner it wants, e.g. "X requires prepOwner but NONE was assigned. Accepted values: [AMAZON, SELLER]"
+        let fixed = 0;
+        for (const mt of String(err.message).matchAll(/(\S+) requires (prepOwner|labelOwner) but \w+ was assigned\. Accepted values: \[([A-Z, ]+)\]/g)){
+          const ok = mt[3].split(",").map(x => x.trim()), pick = ok.includes("SELLER") ? "SELLER" : ok[0];
+          sh.owners = sh.owners || {}; sh.owners[mt[1]] = sh.owners[mt[1]] || {prep: "SELLER", label: "SELLER"};
+          sh.owners[mt[1]][mt[2] === "prepOwner" ? "prep" : "label"] = pick; fixed++;
+        }
+        if (!fixed || attempt === 2) throw err;
+        shipLog("Retrying with Amazon's prep/label owners for " + fixed + " SKU(s)"); save();
+        continue;
+      }
       sh.done.plan = true; sh.step = "packing"; shipLog("Plan " + sh.planId); save(); renderShipSoon();
+     }
     }
     if (!sh.done.packing){
       await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/packingOptions`));
