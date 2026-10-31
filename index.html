@@ -75,6 +75,14 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .buyback{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
 .buyback .label{margin-right:2px}
 .buyback .chip{padding:5px 11px;font:700 14px var(--display);letter-spacing:.06em}
+.setmenu{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.setmenu button{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px;text-align:left;border-top:1px solid var(--line)}
+.setmenu button:first-child{border-top:0}
+.setmenu b{display:block;font-size:16px}
+.setmenu small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+.setmenu .chev{color:var(--muted);font-size:22px}
+.sec-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.sec-head h2{margin:0}
 .target{font-size:12px;font-weight:600;opacity:.85;font-family:var(--mono)}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
 .tiles>div{padding:9px 6px;text-align:center;min-width:0}
@@ -258,7 +266,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-31a";
+const APP_VERSION = "2026-10-31b";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -730,6 +738,7 @@ function imgUrl(p){
 /* ============ views ============ */
 let tab = "scan";
 function setTab(t){
+  if (t === "settings") settingsSec = null;     // the Settings tab always opens the menu
   tab = t;
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-current", String(b.dataset.tab===t)));
   ({scan:renderScan, history:renderHistory, inventory:renderInventory, settings:renderSettings})[t]();
@@ -1700,19 +1709,43 @@ function renderInventory(){
 }
 
 /* ============ settings ============ */
+// Settings: a menu, and each section opens on its own page
+let settingsSec = null;
+const SET_SECTIONS = [
+  {key:"keepa",    title:"Keepa",               sub:() => S.key ? (S.tokens != null ? kfmt(S.tokens) + " tokens left" : "Key saved") : "Add your API key"},
+  {key:"amazon",   title:"Amazon live offers",  sub:() => useAmazon() ? "On · offers, fees, restrictions" : "Set up (free)"},
+  {key:"sound",    title:"Sound",               sub:() => ({beep:"Beeps", voice:"Voice", off:"Off"})[S.sound] || "Beeps"},
+  {key:"costs",    title:"Costs",               sub:() => `$${S.inbound}/lb inbound · $${S.prep} prep`},
+  {key:"triggers", title:"FBA triggers",        sub:() => `${S.triggers.filter(t => t.on).length} on${S.mode === "triggers" ? " · active" : ""}`},
+  {key:"roi",      title:"ROI rule",            sub:() => `$${S.roi.minProfit} · ${S.roi.minRoi}% ROI${S.mode === "roi" ? " · active" : ""}`},
+  {key:"ev",       title:"How often it sells",  sub:() => S.mode === "ev" ? "Active" : "EV mode table"},
+  {key:"app",      title:"App",                 sub:() => "Version " + APP_VERSION}
+];
+function showSettingsSection(){
+  const m = $("#setMenu"); if (!m) return;
+  m.hidden = !!settingsSec;
+  document.querySelectorAll("[data-sec]").forEach(x => x.hidden = x.dataset.sec !== settingsSec);
+  document.querySelectorAll("[data-sec-open]").forEach(b => b.onclick = () => { settingsSec = b.dataset.secOpen; showSettingsSection(); $("#main").scrollTop = 0; });
+  document.querySelectorAll("[data-back]").forEach(b => b.onclick = () => { settingsSec = null; renderSettings(); $("#main").scrollTop = 0; });
+}
 function renderSettings(){
-  $("#main").innerHTML = `<h2>Settings</h2>
+  $("#main").innerHTML = `<div id="setMenu"><h2>Settings</h2><div class="setmenu">${SET_SECTIONS.map(x => `<button data-sec-open="${x.key}"><span><b>${x.title}</b><small>${esc(x.sub())}</small></span><span class="chev">›</span></button>`).join("")}</div></div>
+<section data-sec="keepa" hidden><div class="sec-head"><button class="mini" data-back>‹ Settings</button><h2>Keepa</h2></div>
   <div class="card">
     <div class="field">Keepa API key<input id="key" type="password" value="${esc(S.key)}" placeholder="Paste your key" autocomplete="off"></div>
     <div class="note" style="margin-top:6px">Stored only on this phone. Each scan uses about 1 token, plus 2 with buy box on.</div>
     <div class="row" style="margin-top:10px"><span class="grow">Auto-load live offers (≈6 tokens per 10 offers)</span><label class="switch"><input type="checkbox" id="ao" ${S.autoOffers?"checked":""}><span></span></label></div>
-    <div class="row" style="margin-top:10px"><span class="grow">Sound for BUY / SKIP</span>
-      <select id="snd" style="width:auto;padding:6px 8px"><option value="beep" ${S.sound==="beep"?"selected":""}>Beeps</option><option value="voice" ${S.sound==="voice"?"selected":""}>Voice</option><option value="off" ${S.sound==="off"?"selected":""}>Off</option></select>
-      <button class="mini" id="sndTest">Test</button></div>
     <div class="row" style="margin-top:8px"><button class="mini" id="tokBtn">Check tokens</button><span class="note grow" id="tokOut"></span></div>
     <div class="row" style="margin-top:10px"><span class="grow">Buy box prices (+2 tokens)</span><label class="switch"><input type="checkbox" id="bb" ${S.buybox?"checked":""}><span></span></label></div>
-  </div>
-  <div class="card"><div class="label" style="margin-bottom:8px">Amazon live offers (free)</div>
+  </div></section>
+<section data-sec="sound" hidden><div class="sec-head"><button class="mini" data-back>‹ Settings</button><h2>Sound</h2></div>
+  <div class="card">
+    <div class="row" ><span class="grow">Sound for BUY / SKIP</span>
+      <select id="snd" style="width:auto;padding:6px 8px"><option value="beep" ${S.sound==="beep"?"selected":""}>Beeps</option><option value="voice" ${S.sound==="voice"?"selected":""}>Voice</option><option value="off" ${S.sound==="off"?"selected":""}>Off</option></select>
+      <button class="mini" id="sndTest">Test</button></div>
+  </div></section>
+<section data-sec="amazon" hidden><div class="sec-head"><button class="mini" data-back>‹ Settings</button><h2>Amazon live offers</h2></div>
+  <div class="card">
     <div class="note" style="margin-bottom:8px">Uses your Bethany Lister relay: live offers, exact Amazon fees and a restriction check after every scan, 0 Keepa tokens.</div>
     <div class="row"><span class="grow">Get offers from Amazon</span><label class="switch"><input type="checkbox" id="amzOn" ${S.amzOn?"checked":""}><span></span></label></div>
     <div class="field" style="margin-top:8px">Relay (Worker) URL<input id="amzWorker" value="${esc(S.amzWorker)}" autocapitalize="off" autocomplete="off"></div>
@@ -1720,23 +1753,26 @@ function renderSettings(){
     <div class="row" style="margin-top:10px"><span class="grow">Always SKIP restricted items</span><label class="switch"><input type="checkbox" id="skipGated" ${S.skipGated?"checked":""}><span></span></label></div>
     <div class="row" style="margin-top:10px"><span class="grow">SKIP when Amazon is selling</span><label class="switch"><input type="checkbox" id="skipAmazon" ${S.skipAmazon?"checked":""}><span></span></label></div>
     <div class="row" style="margin-top:8px"><button class="mini" id="amzTest">Test</button><span class="note grow" id="amzOut"></span></div>
-  </div>
-  <div class="card"><div class="label" style="margin-bottom:8px">Costs</div>
+  </div></section>
+<section data-sec="costs" hidden><div class="sec-head"><button class="mini" data-back>‹ Settings</button><h2>Costs</h2></div>
+  <div class="card">
     <div class="trig-grid">
       <label>Inbound ship $/lb<input id="inb" inputmode="decimal" value="${S.inbound}"></label>
       <label>Prep per unit $<input id="prep" inputmode="decimal" value="${S.prep}"></label>
       <label>Default buy cost $<input id="dc" inputmode="decimal" value="${S.defCost}"></label>
     </div>
-  </div>
-  <div class="row" style="margin:14px 0 6px"><h2 class="grow" style="margin:0">ROI rule</h2><span class="note">${S.mode==="roi"?"Active":"Tap ROI on the scanner to use"}</span></div>
+  </div></section>
+<section data-sec="roi" hidden><div class="sec-head"><button class="mini" data-back>‹ Settings</button><h2>ROI rule</h2></div>
+  <div class="row" style="margin:0 0 6px"><span class="grow"></span><span class="note">${S.mode==="roi"?"Active":"Tap ROI on the scanner to use"}</span></div>
   <div class="card trig"><div class="note">BUY when every one of these is true.</div>
     <div class="trig-grid">
       <label>Min profit $<input inputmode="decimal" data-roi="minProfit" value="${S.roi.minProfit}"></label>
       <label>Min ROI %<input inputmode="decimal" data-roi="minRoi" value="${S.roi.minRoi}"></label>
       <label>Max sales rank<input inputmode="numeric" data-roi="maxRank" value="${S.roi.maxRank}"></label>
       <label>Min sales in 6 months<input inputmode="numeric" data-roi="minPulse" value="${S.roi.minPulse}"></label>
-    </div></div>
-  <div class="row" style="margin:14px 0 6px"><h2 class="grow" style="margin:0">FBA triggers</h2><span class="note">${S.mode==="triggers"?"Active":"Off"}</span></div>
+    </div></div></section>
+<section data-sec="triggers" hidden><div class="sec-head"><button class="mini" data-back>‹ Settings</button><h2>FBA triggers</h2></div>
+  <div class="row" style="margin:0 0 6px"><span class="grow"></span><span class="note">${S.mode==="triggers"?"Active":"Off"}</span></div>
   <div class="row card" style="margin-bottom:8px"><span class="grow"><b>Ladder mode</b><br><span class="note">On: a book that misses a tier drops to the next slower tier, which needs more profit. Off: a book must fit a trigger's exact rank and pulse box.</span></span><label class="switch"><input type="checkbox" id="lad" ${S.ladder?"checked":""}><span></span></label></div>
   <div class="note" style="margin-bottom:8px">Checked top to bottom, so keep the fastest tiers first. Red = always skip.</div>
   <div class="row card" style="margin-bottom:8px"><span class="grow"><b>Judge rank by</b><br><span class="note">Used by triggers and the ROI rule.</span></span>
@@ -1752,23 +1788,25 @@ function renderSettings(){
     </div>
     <div class="row" style="margin-top:8px;gap:6px"><button class="mini" data-up="${i}">Move up</button><button class="mini" data-rm="${i}">Delete</button></div>
   </div>`).join("")}</div>
-  <div class="row" style="gap:8px"><button class="btn" id="addT" style="flex:1">Add trigger</button><button class="btn" id="resetT" style="flex:1">Reset to defaults</button></div>
-
-  <div class="row" style="margin:18px 0 6px"><h2 class="grow" style="margin:0">How often it sells</h2><span class="note">${S.mode==="ev"?"Active":"Off"}</span></div>
+  <div class="row" style="gap:8px"><button class="btn" id="addT" style="flex:1">Add trigger</button><button class="btn" id="resetT" style="flex:1">Reset to defaults</button></div></section>
+<section data-sec="ev" hidden><div class="sec-head"><button class="mini" data-back>‹ Settings</button><h2>How often it sells</h2></div>
+  <div class="row" style="margin:0 0 6px"><span class="grow"></span><span class="note">${S.mode==="ev"?"Active":"Off"}</span></div>
   <div class="note" style="margin-bottom:8px">Expected = profit × share sold within 6 months. BUY when expected is at least the amount in its row. Leave blank to pass on that speed.</div>
   <div class="card" style="overflow-x:auto"><table class="ev"><tr><td></td><td class="label" style="text-align:center">% sold 6m</td><td class="label" style="text-align:center">Keep $</td></tr>
   ${S.ev.map((r,i)=>`<tr><td>${r.label}<small>${r.sub}</small></td>
     <td style="width:74px"><input inputmode="numeric" data-ev="pct" data-i="${i}" value="${r.pct}"></td>
     <td style="width:84px"><input inputmode="decimal" data-ev="keep" data-i="${i}" value="${r.keep??""}" placeholder="Pass"></td></tr>`).join("")}
-  </table></div>
-  <div class="card" style="margin-top:14px"><div class="label" style="margin-bottom:8px">App</div>
+  </table></div></section>
+<section data-sec="app" hidden><div class="sec-head"><button class="mini" data-back>‹ Settings</button><h2>App</h2></div>
+  <div class="card">
     <div class="field">App link<div class="row"><input id="appLink" readonly value="https://lisyalis.github.io/scout-app/"><button class="mini" id="copyLink">Copy</button></div></div>
     <div class="links" style="margin-top:10px">
       <a class="chip" target="_blank" rel="noopener" href="https://lisyalis.github.io/scout-app/">Open app</a>
       <a class="chip" target="_blank" rel="noopener" href="https://github.com/lisyalis/scout-app">GitHub repo</a>
       <a class="chip acc" href="lister/">Bethany Lister</a>
     </div>
-    <div class="note" style="margin-top:8px">Version ${APP_VERSION}</div></div>`;
+    <div class="note" style="margin-top:8px">Version ${APP_VERSION}</div></div></section>`;
+  showSettingsSection();
   const num = (el, d=0) => { const v=parseFloat(el.value); return isNaN(v)?d:v; };
   $("#copyLink").onclick = async () => { const el = $("#appLink");
     try { await navigator.clipboard.writeText(el.value); toast("Link copied"); } catch(e){ el.focus(); el.select(); toast("Selected. Tap Copy in the menu"); } };
