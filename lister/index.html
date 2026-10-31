@@ -209,10 +209,11 @@ const S = {
   sp: LS.get("sp", {on: true, undercut: 0.01, minProfit: 3, minRoi: 0, capNew: true, mfShip: 3.99}),
   importedScout: LS.get("importedScout", []),
   trips: LS.get("trips", []),
+  inbox: LS.get("inbox", []),
   mileRate: LS.get("mileRate", ""),
   agedDays: LS.get("agedDays", 150),
 };
-function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays","statsScope","chartAuto","chartRange","noteChips","source","sources","sp","importedScout","trips","mileRate","agedDays"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays","statsScope","chartAuto","chartRange","noteChips","source","sources","sp","importedScout","trips","mileRate","agedDays","inbox"]) LS.set(k, S[k]); }
 function rememberSource(src){ if (!src) return; S.sources = [src].concat(S.sources.filter(x => x.toLowerCase() !== src.toLowerCase())).slice(0, 12); save(); }
 // Keepa key is shared with Scout (same site, stored by Scout as scout.key)
 const keepaKey = () => { try { return JSON.parse(localStorage.getItem("scout.key")) || ""; } catch(e){ return ""; } };
@@ -558,9 +559,16 @@ async function listAll(){
   toast(`Listed ${okN}` + (errN ? ` · ${errN} need fixing` : ""));
 }
 // ---------- Scout → Lister: books you tapped "Add to inventory" in Scout ----------
-const scoutInv = () => { try { return JSON.parse(localStorage.getItem("scout.inv")) || []; } catch(e){ return []; } };
+// Scout's books arrive two ways: through the relay (any device / Home Screen app) and, if Scout runs in the same browser, its saved list
+const scoutInv = () => {
+  let local = []; try { local = JSON.parse(localStorage.getItem("scout.inv")) || []; } catch(e){}
+  const byT = new Map();
+  for (const x of S.inbox.concat(local)) if (x && x.t && !byT.has(x.t)) byT.set(x.t, x);
+  return [...byT.values()];
+};
 const scoutPending = () => scoutInv().filter(x => x.status === "bought" && !S.importedScout.includes(x.t));
 function markScout(t, status){
+  const ib = S.inbox.find(x => x.t === t); if (ib){ ib.status = status; ib.editedAt = Date.now(); save(); syncSoon(); }
   try { const inv = scoutInv(); const x = inv.find(y => y.t === t); if (x){ x.status = status; localStorage.setItem("scout.inv", JSON.stringify(inv)); } } catch(e){}
 }
 let importing = null;
@@ -663,7 +671,8 @@ function syncSoon(){ clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800);
 async function sync(){
   if (!S.worker || !S.key) return;
   try {
-    const d = await api("/sync", {method: "POST", body: JSON.stringify({listed: S.listed, ticket: S.ticket, trips: S.trips})});
+    const d = await api("/sync", {method: "POST", body: JSON.stringify({listed: S.listed, ticket: S.ticket, trips: S.trips, inbox: S.inbox})});
+    if (Array.isArray(d.inbox)){ const before = scoutPending().length; S.inbox = d.inbox; if (tab === "list" && scoutPending().length !== before && !importing) renderBatch(); }
     S.listed = d.listed || S.listed;
     if (Array.isArray(d.trips)) S.trips = d.trips;
     S.ticket = Math.max(S.ticket, d.ticket || 1);

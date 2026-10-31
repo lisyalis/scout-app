@@ -452,6 +452,11 @@ function parseOffers(p){
 }
 const OFFER_TTL = 2*3600e3;
 const useAmazon = () => !!(S.amzOn && S.amzWorker && S.amzKey);
+// Hand "Add to inventory" books to Bethany Lister through the same relay (works across devices and Home Screen apps)
+function sendToLister(items){
+  if (!S.amzWorker || !S.amzKey) return;
+  fetch(S.amzWorker.replace(/\/+$/, "") + "/sync", {method: "POST", headers: {"x-app-key": S.amzKey, "content-type": "application/json"}, body: JSON.stringify({inbox: items})}).catch(() => {});
+}
 async function amzApi(path){
   let r;
   try { r = await fetch(S.amzWorker.replace(/\/+$/, "") + path, {headers:{"x-app-key": S.amzKey}, cache:"no-store"}); }
@@ -1070,8 +1075,10 @@ function wireScan(){
   $("#clearRes").onclick = () => { current=null; renderScan(); setTimeout(()=>$("#q").focus(),0); };
   $("#addInv").onclick = () => {
     const p=current.product, c=current.calc;
-    S.inv.unshift({t:Date.now(), asin:p.asin, title:p.title, img:imgUrl(p), cost:current.cost||0, sell:c.sell, profit:c.profit, cond:S.cond, status:"bought"});
+    const it = {t:Date.now(), asin:p.asin, title:p.title, img:imgUrl(p), cost:current.cost||0, sell:c.sell, profit:c.profit, cond:S.cond, status:"bought"};
+    S.inv.unshift(it);
     save(); toast("Added to inventory");
+    sendToLister([it]);
   };
   document.querySelectorAll("[data-m]").forEach(b => b.onclick = () => pick(current.matches[+b.dataset.m]));
 }
@@ -2001,6 +2008,8 @@ if ("serviceWorker" in navigator && location.protocol === "https:"){
 }
 // stop iPhone from zooming the page when tapping inputs, so it feels like an app
 document.addEventListener("gesturestart", e => e.preventDefault());
+// on open, make sure every "bought" book has reached Bethany Lister
+setTimeout(() => { try { const b = S.inv.filter(x => x.status === "bought"); if (b.length) sendToLister(b); } catch(e){} }, 1500);
 </script>
 </body>
 </html>
