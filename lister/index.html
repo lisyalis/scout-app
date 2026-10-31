@@ -570,7 +570,7 @@ async function importScout(){
   importing = {done: 0, total: list.length}; renderBatch();
   for (const x of list){
     try {
-      const cond = x.cond === "new" ? "new" : (S.cond === "new" ? "very_good" : S.cond);
+      const cond = x.cond === "new" ? "new" : "very_good";   // Scout imports: used books come in as Very Good (change any in the batch)
       let info = {asin: x.asin, title: x.title, img: x.img || ""};
       try { const d = await api("/lookup?code=" + encodeURIComponent(x.asin)); const m = (d.items || []).map(mapCatalog).find(y => y.asin === x.asin) || (d.items || []).map(mapCatalog)[0]; if (m) info = {...info, ...m}; } catch(e){}
       const offers = {};
@@ -613,7 +613,8 @@ function batchHTML(){
         <div class="m"><span class="tag ${x.channel}">${x.channel.toUpperCase()}</span> ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")}` : ""}${e && e.status && e.status.fnsku ? ` · ${esc(e.status.fnsku)}` : ""}</div>
         ${x.msg ? `<div class="m neg">${esc(x.msg)}</div>` : ""}
         ${x.why && x.state === "ready" ? `<div class="m">${x.fromScout ? "From Scout · " : ""}${esc(x.why)}</div>` : ""}</div>
-        ${x.state !== "listed" && x.state !== "listing" ? `<input data-bprice="${i}" class="num" inputmode="decimal" value="${(x.price || 0).toFixed(2)}" aria-label="Price" style="width:74px;padding:6px">
+        ${x.state !== "listed" && x.state !== "listing" ? `<select data-bcond="${i}" aria-label="Condition" style="width:auto;padding:6px 4px">${CONDS.map(c => `<option value="${c.id}" ${x.cond === c.id ? "selected" : ""}>${c.short}</option>`).join("")}</select>
+          <input data-bprice="${i}" class="num" inputmode="decimal" value="${(x.price || 0).toFixed(2)}" aria-label="Price" style="width:74px;padding:6px">
           <button class="mini" data-brm="${i}" aria-label="Remove">✕</button>` : ""}</div></div>`;
   };
   return `<div class="card" id="batchPanel">
@@ -639,6 +640,14 @@ function wireBatch(){
   if ($("#bImport")) $("#bImport").onclick = importScout;
   if (!$("#bList")) return;
   document.querySelectorAll("[data-brm]").forEach(b => b.onclick = () => { S.batch.splice(+b.dataset.brm, 1); save(); renderBatch(); });
+  document.querySelectorAll("[data-bcond]").forEach(sel => sel.onchange = () => {
+    const x = S.batch[+sel.dataset.bcond]; if (!x) return;
+    const oldFirst = notesFor(x.cond)[0] || "";
+    x.cond = sel.value;
+    if (!x.note || x.note === oldFirst) x.note = notesFor(x.cond)[0] || "";
+    x.sku = buildSku({cost: x.cost, cond: x.cond, channel: x.channel, ticket: x.ticket, source: x.source});
+    save();
+  });
   document.querySelectorAll("[data-bprice]").forEach(inp => inp.onchange = () => {
     const x = S.batch[+inp.dataset.bprice], v = parseFloat(inp.value); if (!x) return;
     if (v > 0 && Math.abs(v - (x.price || 0)) >= 0.005){ x.price = +v.toFixed(2); x.why = "Your price"; if (x.state === "error" && /No price/.test(x.msg || "")){ x.state = "ready"; x.msg = ""; } save(); refreshStats(); }   // no redraw here: it would fight the tap that blurred this box
