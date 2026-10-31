@@ -281,7 +281,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-31c";
+const APP_VERSION = "2026-10-31d";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -543,7 +543,9 @@ function offersHTML(){
   const usedL = o ? o.filter(x => x.used) : null, newL = o ? o.filter(x => x.isNew) : null;
   const fbaL = o ? o.filter(x => x.fba) : null;
   const want = x => S.cond === "used" ? x.used : x.isNew;
-  const sellOffer = fbaL ? fbaL.find(want) : null;
+  // the offer the sell price actually comes from (it can be capped at a cheaper new Prime copy)
+  const sellOffer = c.sellSrc === "your pick" || !fbaL || c.sell == null ? null
+    : (fbaL.find(x => want(x) && Math.abs(x.total - c.sell) < .005) || fbaL.find(x => Math.abs(x.total - c.sell) < .005) || null);
   const counts = {used: usedL ? usedL.length : pr.countUsed, new: newL ? newL.length : pr.countNew, fba: fbaL ? fbaL.length : "?"};
   const head = `<div class="offtabs">
     <button style="background:#b8c0c8" aria-pressed="true">USED (${counts.used})</button>
@@ -551,6 +553,7 @@ function offersHTML(){
     <button style="background:var(--accent)" aria-pressed="true">${o ? `FBA (${counts.fba})` : "BUY BOX"}</button></div>`;
   const sellbar = `<div class="sellbar"><span class="amt num">${money(c.sell)}</span><span class="note">sell price</span>
     ${current.pick != null ? `<span class="src">YOUR PICK</span><button class="mini" id="clearPick">Auto</button>`
+      : /capped/.test(c.sellSrc) ? `<span class="src">${esc(c.sellSrc).toUpperCase()}${sellOffer ? " " + sellOffer.total.toFixed(2) : ""}</span>`
       : sellOffer ? `<span class="src">FBA ${sellOffer.total.toFixed(2)} · ${short(sellOffer.cond)}</span>` : `<span class="src">${esc(c.sellSrc).toUpperCase()}</span>`}
     ${o ? `<span class="note" style="margin-left:auto">${current.offersFrom === "Amazon" ? "Amazon · " : ""}${current.offersAt ? Math.max(0,Math.round((Date.now()-current.offersAt)/60000)) + "m old" : ""}</span><button class="mini" id="reOff">Refresh</button>` : '<span class="note" style="margin-left:auto">from Keepa stats</span>'}</div>`;
   let body;
@@ -700,11 +703,12 @@ function trigDecide(res){
     if (inRank && inPulse){
       res.trigger = t.name; res.trigColor = t.color;
       if (t.color === "red"){ res.why = t.name; return res; }
-      res.target = t.minProfit;
+      if (res.target == null){ res.target = t.minProfit; res.targetTier = t.name; }
       if (res.profit >= t.minProfit){ res.buy = true; res.why = t.name; return res; }
     }
   }
-  res.why = res.trigger ? "Under min profit" : "No trigger hit";
+  if (res.targetTier){ res.trigger = res.targetTier; res.why = "Under min profit · " + res.targetTier; }
+  else res.why = res.trigger ? "Under min profit" : "No trigger hit";
   return res;
 }
 function roiDecide(res){
