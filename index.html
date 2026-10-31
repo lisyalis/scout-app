@@ -83,6 +83,21 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .setmenu .chev{color:var(--muted);font-size:22px}
 .sec-head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
 .sec-head h2{margin:0}
+.statpill{display:inline-flex;align-items:center;gap:4px;font:700 16px var(--display);color:var(--fg);padding:5px 10px;border-radius:999px;flex:none}
+.toprow{gap:6px}
+.toprow .seg{flex:none}
+.toprow .seg button{padding:5px 9px;font-size:14px}
+@media (max-width:370px){.toprow .seg button{padding:4px 6px;font-size:13px}.statpill{padding:4px 7px;font-size:14px}}
+.sbar{display:flex;height:12px;border-radius:99px;overflow:hidden;margin:12px 0 8px;background:var(--line)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle}
+.sgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.sgrid .card{margin:0 0 8px;padding:10px}
+.sgrid .sv{font:700 30px/1.1 var(--display);margin-top:4px}
+.days{display:flex;align-items:flex-end;gap:2px;height:140px;margin:8px 0 4px}
+.day{flex:1;height:100%;display:flex;align-items:flex-end;padding:0;min-width:0;border-radius:3px}
+.day .col{width:100%;background:var(--line);border-radius:3px 3px 1px 1px;display:flex;align-items:flex-end;overflow:hidden}
+.day .acc{width:100%;background:var(--buy)}
+.day.on{box-shadow:inset 0 -3px 0 var(--accent)}
 .target{font-size:12px;font-weight:600;opacity:.85;font-family:var(--mono)}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
 .tiles>div{padding:9px 6px;text-align:center;min-width:0}
@@ -266,7 +281,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-31b";
+const APP_VERSION = "2026-10-31c";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -391,8 +406,8 @@ async function lookup(raw){
       gp.then(() => { if (current === mine){ mine.calc = calc(mine.product, mine.cost); renderScan(); } });
       current.calc = calc(current.product, current.cost);
     }
-    S.history.unshift(histEntry(current));
-    S.history = S.history.slice(0,300);
+    S.history.unshift(histEntry(current)); current.histT = S.history[0].t;
+    S.history = S.history.slice(0,5000);
     save();
     if (navigator.vibrate) navigator.vibrate(current.calc.buy ? [60,40,60] : 120);
     announce(current.calc);
@@ -683,7 +698,7 @@ function trigDecide(res){
     const inRank = ladder ? (rank > 0 && rank <= t.rMax) : (rank >= t.rMin && rank <= t.rMax);
     const inPulse = ladder ? pulse >= t.pMin : (pulse >= t.pMin && pulse <= t.pMax);
     if (inRank && inPulse){
-      res.trigger = t.name;
+      res.trigger = t.name; res.trigColor = t.color;
       if (t.color === "red"){ res.why = t.name; return res; }
       res.target = t.minProfit;
       if (res.profit >= t.minProfit){ res.buy = true; res.why = t.name; return res; }
@@ -726,7 +741,8 @@ function evDecide(res){
 }
 function histEntry(cur){
   const p = cur.product, c = cur.calc;
-  return {t:Date.now(), asin:p.asin, title:p.title, img:imgUrl(p), buy:c.buy, profit:c.profit, rank:c.pr.rank, pulse:c.pr.pulse, why:c.why, gated:cur.gate === "bad"};
+  return {t:Date.now(), asin:p.asin, title:p.title, img:imgUrl(p), buy:c.buy, profit:c.profit, rank:c.pr.rank, pulse:c.pr.pulse, why:c.why, gated:cur.gate === "bad",
+    cost:Number(cur.cost)||0, look:c.buy && c.trigColor === "yellow"};
 }
 function imgUrl(p){
   let n = null;
@@ -741,7 +757,7 @@ function setTab(t){
   if (t === "settings") settingsSec = null;     // the Settings tab always opens the menu
   tab = t;
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-current", String(b.dataset.tab===t)));
-  ({scan:renderScan, history:renderHistory, inventory:renderInventory, settings:renderSettings})[t]();
+  ({scan:renderScan, history:renderHistory, inventory:renderInventory, settings:renderSettings, stats:renderStats})[t]();
 }
 document.getElementById("tabs").addEventListener("click", e => { const b=e.target.closest("button"); if(b) setTab(b.dataset.tab); });
 
@@ -766,7 +782,104 @@ function renderScan(err){
     try { wireScanBar(); } catch(e2){}
   }
 }
+// keep the saved scan in step when the answer changes later (live offers, exact fees, your cost or pick)
+function syncHistory(){
+  if (!current || !current.histT || busy) return;
+  const h = S.history.find(x => x.t === current.histT); if (!h) return;
+  const n = histEntry(current), c = current.calc;
+  if (h.buy !== n.buy || h.profit !== n.profit || h.cost !== n.cost || h.gated !== n.gated || h.why !== n.why){
+    Object.assign(h, {buy:n.buy, profit:n.profit, cost:n.cost, gated:n.gated, why:n.why, look:n.look});
+    LS.set("history", S.history);
+  }
+}
+/* ============ stats ============ */
+let statPeriod = "month", statDay = null;
+function periodRange(k){
+  const now = new Date(), d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (k === "today") return [d0.getTime(), Infinity, "Today"];
+  if (k === "7d") return [d0.getTime() - 6*864e5, Infinity, "Last 7 days"];
+  if (k === "last"){ const a = new Date(now.getFullYear(), now.getMonth()-1, 1), b = new Date(now.getFullYear(), now.getMonth(), 1); return [a.getTime(), b.getTime(), "Last month"]; }
+  if (k === "all") return [0, Infinity, "All time"];
+  return [new Date(now.getFullYear(), now.getMonth(), 1).getTime(), Infinity, "This month"];
+}
+function statScans(){ const [a] = periodRange("month"); return S.history.filter(h => h.t >= a).length; }
+const dayKey = t => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+const fmtDay = t => new Date(t).toLocaleDateString("en-US", {weekday:"short", month:"short", day:"numeric"});
+function statsData(){
+  const [a, b, label] = periodRange(statPeriod);
+  const list = S.history.filter(h => h.t >= a && h.t < b), acc = list.filter(h => h.buy);
+  const profit = acc.reduce((s, h) => s + (h.profit || 0), 0), spent = acc.reduce((s, h) => s + (h.cost || 0), 0);
+  const look = acc.filter(h => h.look).length;
+  // bars: one per day from the first day in range (all time: last 60 days with scans)
+  let start = list.length ? dayKey(Math.min(...list.map(h => h.t))) : dayKey(Date.now());
+  if (statPeriod === "month" || statPeriod === "last") start = dayKey(a);
+  const end = statPeriod === "last" ? dayKey(b - 1) : dayKey(Date.now());
+  if (statPeriod === "all") start = Math.max(start, end - 59*864e5);
+  const days = [];
+  for (let t = start; t <= end; t = dayKey(t + 36e5*26)){
+    const hs = list.filter(h => dayKey(h.t) === t), ac = hs.filter(h => h.buy);
+    days.push({t, scans:hs.length, acc:ac.length, profit:ac.reduce((s, h) => s + (h.profit || 0), 0)});
+  }
+  const inv = S.inv.filter(x => x.t >= a && x.t < b).length;
+  const best = [...acc].sort((x, y) => (y.profit || 0) - (x.profit || 0)).slice(0, 3);
+  return {label, a, b, list, acc, profit, spent, look, days, inv, best};
+}
+function renderStats(){
+  const D = statsData(), n = D.acc.length;
+  const max = Math.max(1, ...D.days.map(d => d.scans));
+  if (statDay == null || !D.days.some(d => d.t === statDay)) statDay = D.days.length ? D.days[D.days.length-1].t : null;
+  const sel = D.days.find(d => d.t === statDay);
+  const amz = n - D.look;
+  const range = `${new Date(D.a || (D.list.length ? Math.min(...D.list.map(h => h.t)) : Date.now())).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(Math.min(D.b === Infinity ? Date.now() : D.b - 1, Date.now())).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`;
+  $("#main").innerHTML = `
+  <div class="row" style="margin-bottom:10px"><button class="mini" id="statBack">‹ Scanner</button><h2 class="grow" style="margin:0">Stats</h2><span class="note num">${S.tokens == null ? "" : kfmt(S.tokens) + " tokens"}</span></div>
+  <div class="row" style="margin-bottom:10px;flex-wrap:wrap">
+    <b>${esc(D.label)}</b><span class="note">· ${range}</span>
+    <select id="statPer" style="width:auto;padding:5px 8px;margin-left:auto">${[["today","Today"],["7d","Last 7 days"],["month","This month"],["last","Last month"],["all","All time"]].map(([k,l]) => `<option value="${k}" ${statPeriod===k?"selected":""}>${l}</option>`).join("")}</select>
+    <button class="mini" id="statShare">Share</button>
+  </div>
+  <div class="card">
+    <div class="label">Projected profit</div>
+    <div class="num" style="font:700 46px/1.05 var(--display);color:var(--buy);margin:4px 0">${Math.abs(D.profit) >= 1000 ? (D.profit < 0 ? "-$" : "$") + Math.round(Math.abs(D.profit)).toLocaleString() : money(D.profit)}</div>
+    <div>From ${n} accept${n === 1 ? "" : "s"}${n ? ` · ${money(D.profit/n)} an accept` : ""}</div>
+    ${n ? `<div class="sbar"><i style="flex:${amz};background:var(--buy)"></i><i style="flex:${D.look};background:var(--warn)"></i></div>
+    <div class="row" style="gap:14px;font-size:14px"><span><span class="dot" style="background:var(--buy)"></span>Amazon <b>${amz}</b></span><span><span class="dot" style="background:var(--warn)"></span>Closer look <b>${D.look}</b></span></div>` : ""}
+  </div>
+  <div class="sgrid">
+    <div class="card"><div class="label">Scans</div><div class="sv num">${D.list.length.toLocaleString()}</div></div>
+    <div class="card"><div class="label">Accepts</div><div class="sv num">${n.toLocaleString()}</div></div>
+    <div class="card"><div class="label">Accept rate</div><div class="sv num">${D.list.length ? Math.round(n/D.list.length*100) : 0}%</div></div>
+    <div class="card"><div class="label">Spent</div><div class="sv num" style="font-size:24px">${money(D.spent)}</div><small class="note">Buy cost, accepts</small></div>
+    <div class="card"><div class="label">Return</div><div class="sv num">${D.spent > 0 ? (D.profit/D.spent).toFixed(1) + "×" : "—"}</div><small class="note">Profit per $1 spent</small></div>
+    <div class="card"><div class="label">Inventory</div><div class="sv num">${D.inv}</div><small class="note">Items added</small></div>
+  </div>
+  <div class="card">
+    <div class="row"><span class="label grow">Scans by day</span><span class="note"><span class="dot" style="background:var(--buy)"></span>Accepts <span class="dot" style="background:var(--line);margin-left:8px"></span>Other</span></div>
+    <div style="margin:6px 0 2px;font-weight:600">${sel ? `${fmtDay(sel.t)} <span class="note">${sel.scans} scan${sel.scans === 1 ? "" : "s"} · ${sel.acc} accept${sel.acc === 1 ? "" : "s"} · ${money(sel.profit)}</span>` : "No scans yet"}</div>
+    <div class="days">${D.days.map(d => `<button class="day${d.t === statDay ? " on" : ""}" data-day="${d.t}" aria-label="${fmtDay(d.t)}: ${d.scans} scans">
+      <span class="col" style="height:${Math.max(3, d.scans/max*100)}%"><span class="acc" style="height:${d.scans ? d.acc/d.scans*100 : 0}%"></span></span></button>`).join("")}</div>
+    ${D.days.length > 1 ? `<div class="row note" style="justify-content:space-between"><span>${new Date(D.days[0].t).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span><span>${new Date(D.days[D.days.length-1].t).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</span></div>` : ""}
+  </div>
+  <div class="card">
+    <div class="label" style="margin-bottom:6px">Best finds</div>
+    ${D.best.length ? D.best.map(h => `<div class="row" style="padding:8px 0;border-top:1px solid var(--line)">
+      ${h.img ? `<img src="${h.img}" alt="" style="width:40px;height:52px;object-fit:contain;background:#fff;border-radius:5px">` : ""}
+      <div class="grow"><div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${esc(h.title)}</div>
+      <div class="note"><span class="dot" style="background:${h.look ? "var(--warn)" : "var(--buy)"}"></span>${h.look ? "Closer look" : "Amazon"} · ${new Date(h.t).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div></div>
+      <div class="num" style="font:700 20px var(--display);color:var(--buy)">${money(h.profit)}</div></div>`).join("") : `<div class="note">Your BUYs will show up here.</div>`}
+  </div>
+  <div class="note" style="margin-top:4px">Scans saved before this update have no buy cost, so Spent and Return count them as $0.</div>`;
+  $("#statBack").onclick = () => setTab("scan");
+  $("#statPer").onchange = e => { statPeriod = e.target.value; statDay = null; renderStats(); };
+  document.querySelectorAll("[data-day]").forEach(b => b.onclick = () => { statDay = +b.dataset.day; renderStats(); });
+  $("#statShare").onclick = async () => {
+    const txt = `Lisy Scout · ${D.label}\nProjected profit ${money(D.profit)} from ${n} accepts (${money(n ? D.profit/n : 0)} each)\n${D.list.length} scans · ${D.list.length ? Math.round(n/D.list.length*100) : 0}% accept rate\nSpent ${money(D.spent)}${D.spent > 0 ? " · " + (D.profit/D.spent).toFixed(1) + "× return" : ""}`;
+    try { if (navigator.share){ await navigator.share({text:txt}); return; } } catch(e){ if (e && e.name === "AbortError") return; }
+    try { await navigator.clipboard.writeText(txt); toast("Stats copied"); } catch(e){ toast("Couldn't share"); }
+  };
+}
 function renderScanInner(err){
+  syncHistory();
   const head = `<div class="toprow">
     <div class="seg" role="group" aria-label="Condition">
       <button data-cond="used" aria-pressed="${S.cond==="used"}">USED</button>
@@ -777,7 +890,7 @@ function renderScanInner(err){
       <button data-mode="ev" aria-pressed="${S.mode==="ev"}">EV</button>
       <button data-mode="roi" aria-pressed="${S.mode==="roi"}">ROI</button>
     </div>
-    <span class="tokens num" title="Keepa tokens left">${S.tokens==null ? "— tok" : kfmt(S.tokens)+" tok"}</span>
+    <button class="tokens num statpill" id="statBtn" aria-label="Stats"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 20V10M9 20V4M14 20v-7M19 20v-4M3 20h18" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>${kfmt(statScans())}</button>
   </div>`;
   let body;
   if (visual && !busy) body = visualHTML();
@@ -926,6 +1039,7 @@ function wireScanBar(){
 }
 function wireScan(){
   wireScanBar();
+  const sb = $("#statBtn"); if (sb) sb.onclick = () => setTab("stats");
   if (visual && !busy){ wireVisual(); return; }
   document.querySelectorAll("[data-cond]").forEach(b => b.onclick = () => { S.cond=b.dataset.cond; save(); if(current) current.calc=calc(current.product,current.cost); renderScan(); });
   document.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { S.mode=b.dataset.mode; save(); if(current) current.calc=calc(current.product,current.cost); renderScan(); });
