@@ -258,7 +258,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-28f";
+const APP_VERSION = "2026-10-31a";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -300,7 +300,9 @@ const S = {
   amzWorker: LS.get("amzWorker", (() => { try { return JSON.parse(localStorage.getItem("bl_worker")) || ""; } catch(e){ return ""; } })() || "https://bethanylister.wickedgoodproducts.workers.dev"),
   amzKey:    LS.get("amzKey", (() => { try { return JSON.parse(localStorage.getItem("bl_key")) || ""; } catch(e){ return ""; } })()),
   amzOn:     LS.get("amzOn", true),
-  skipGated: LS.get("skipGated", true),     // restricted items always SKIP  // barcode | text (live ISBN reading)
+  skipGated: LS.get("skipGated", true),     // restricted items always SKIP
+  skipAmazon: LS.get("skipAmazon", false),  // SKIP when Amazon itself is selling
+  rankBy:   LS.get("rankBy", "avg90"),      // avg90 | now : which rank the rules use  // barcode | text (live ISBN reading)
   ladder:   LS.get("ladder", true),        // triggers fall through to slower tiers
   roi:      LS.get("roi", {minProfit:5, minRoi:50, maxRank:6000000, minPulse:6}), // live offers cost ~12 tokens per scan
   history:  LS.get("history", []),
@@ -317,7 +319,7 @@ if (!LS.get("addedSlow", false)){
   }
   LS.set("addedSlow", true); LS.set("triggers", S.triggers);
 }
-function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","sound","amzWorker","amzKey","amzOn","skipGated","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","sound","amzWorker","amzKey","amzOn","skipGated","skipAmazon","rankBy","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
 
 /* ============ helpers ============ */
 const $ = s => document.querySelector(s);
@@ -374,7 +376,7 @@ async function lookup(raw){
     current.calc = calc(current.product, current.cost);
     if (useAmazon()){
       // check restrictions before announcing (max 2.5s) so BUY/SKIP and the sound are right
-      const mine = current, gp = loadGate(mine);
+      const mine = current, gp = Promise.all([loadGate(mine), mine.calc.sell ? queueFee(mine, mine.calc.sell) : null]);
       busy = false; renderScan();
       await Promise.race([gp, new Promise(r => setTimeout(r, 2500))]);
       if (ctl !== lookupCtl) return {ok:false, stale:true};
@@ -604,6 +606,7 @@ function readPrices(p){
     newFBA: at(10), usedLN: at(19), usedVG: at(20), usedG: at(21), usedA: at(22),
     rank: c[3] != null && c[3] > 0 ? c[3] : null,
     avgRank: p.stats && p.stats.avg180 && p.stats.avg180[3] > 0 ? p.stats.avg180[3] : null,
+    avg90Rank: p.stats && p.stats.avg90 && p.stats.avg90[3] > 0 ? p.stats.avg90[3] : null,
     pulse: p.stats ? Math.max(0, p.stats.salesRankDrops180 ?? 0) : 0,
     countNew: c[11] > 0 ? c[11] : 0, countUsed: c[12] > 0 ? c[12] : 0,
     histUsed: p.stats && p.stats.avg180 ? cents(p.stats.avg180[2]) : null,
@@ -642,22 +645,28 @@ function calc(p, cost){
   const MEDIA = [283155, 2625373011, 5174, 468642, 229534];
   const isMedia = isBook || MEDIA.includes(p.rootCategory) || /^(DVD|Blu-ray|Audio CD|Vinyl|Video Game|Software|VHS Tape)/i.test(p.binding || "");
   const closing = isMedia ? 1.80 : 0;
-  let fees = null, profit = null;
+  let fees = null, profit = null, amzFee = null;
   if (sell){
-    fees = sell*refPct + closing + fbaFee + lbs*S.inbound + S.prep;
+    // Amazon's own fee (referral + closing + FBA) for this exact price, through your relay; estimate until it arrives
+    if (useAmazon() && current && current.product === p){ amzFee = amazonFee(current, sell); if (amzFee == null) queueFee(current, sell); }
+    fees = (amzFee != null ? amzFee : sell*refPct + closing + fbaFee) + lbs*S.inbound + S.prep;
     profit = sell - fees - (cost||0);
   }
-  const res = {pr, sell, sellSrc, fees, profit, fbaFee, refPct, closing, lbs, isBook, buy:false, why:"", trigger:null};
+  // rank the rules judge on: 90-day average (steadier; one lucky sale doesn't make a slow book look fast), or today's
+  pr.judgeRank = S.rankBy === "avg90" ? (pr.avg90Rank ?? pr.avgRank ?? pr.rank) : pr.rank;
+  const amzSelling = (pr.amazon != null) || !!(current && current.product === p && current.offers && current.offers.some(x => x.amazon));
+  const res = {pr, sell, sellSrc, fees, profit, amzFee, amzSelling, fbaFee, refPct, closing, lbs, isBook, buy:false, why:"", trigger:null};
   if (profit == null){ res.why = "No price"; return res; }
   if (p.isAdultProduct){ res.why = "Adult item"; return res; }
   if (S.skipGated && current && current.product === p && current.gate === "bad"){ res.why = "Restricted"; res.gated = true; return res; }
+  if (S.skipAmazon && amzSelling){ res.why = "Amazon is selling"; return res; }
   res.roi = cost > 0 ? res.profit / cost * 100 : null;
   if (S.mode === "ev") return evDecide(res);
   if (S.mode === "roi") return roiDecide(res);
   return trigDecide(res);
 }
 function trigDecide(res){
-  const rank = res.pr.rank ?? 0, pulse = res.pr.pulse;
+  const rank = res.pr.judgeRank ?? 0, pulse = res.pr.pulse;
   for (const t of S.triggers){
     if (!t.on) continue;
     // Ladder: a better rank or a faster pulse never disqualifies a book. If it misses a tier,
@@ -676,7 +685,7 @@ function trigDecide(res){
   return res;
 }
 function roiDecide(res){
-  const r = S.roi, rank = res.pr.rank, pulse = res.pr.pulse;
+  const r = S.roi, rank = res.pr.judgeRank, pulse = res.pr.pulse;
   res.target = r.minProfit; res.trigger = "ROI rule";
   if (!rank || rank > r.maxRank){ res.why = rank ? "Rank over " + kfmt(r.maxRank) : "No sales rank"; return res; }
   if (pulse < r.minPulse){ res.why = `Only ${pulse} sales in 6m (need ${r.minPulse})`; return res; }
@@ -786,10 +795,31 @@ function maxxEstimate(){
   // MaxX prices against FBA, never against merchant-fulfilled listings, and turns down items that won't sell
   if (!pr.rank) return {no:"no sales rank"};
   if (!(price > 0)) return {no:"no FBA price to sell against"};
-  if (pr.rank > 3000000 || pr.pulse < 3) return {no:`slow seller (${pr.pulse} sales in 6m)`};
-  const fees = price*c.refPct + c.closing + c.fbaFee + c.lbs*S.inbound, payout = (price - fees)/2;
+  if ((pr.judgeRank ?? pr.rank) > 3000000 || pr.pulse < 3) return {no:`slow seller (${pr.pulse} sales in 6m)`};
+  let af = useAmazon() ? amazonFee(current, price) : null;
+  if (af == null && useAmazon()) queueFee(current, price);
+  const fees = (af != null ? af : price*c.refPct + c.closing + c.fbaFee) + c.lbs*S.inbound, payout = (price - fees)/2;
   if (payout < 1) return {no:"payout under $1"};
   return {payout, price, fees, from};
+}
+// Exact Amazon fees, cached per item and price (Amazon allows about 1 fee lookup a second)
+function amazonFee(cur, price){ const f = cur.amzFees && cur.amzFees[price.toFixed(2)]; return typeof f === "number" ? f : null; }
+function queueFee(cur, price){
+  const k = price.toFixed(2); cur.amzFees = cur.amzFees || {};
+  if (k in cur.amzFees) return cur.amzFees[k] instanceof Promise ? cur.amzFees[k] : Promise.resolve();
+  const job = (async () => {
+    for (let tries = 0; tries < 2; tries++){
+      try{
+        const d = await amzApi(`/fees?asin=${cur.product.asin}&price=${k}&fba=1`);
+        const est = d.payload && d.payload.FeesEstimateResult;
+        cur.amzFees[k] = est && est.Status === "Success" ? est.FeesEstimate.TotalFeesEstimate.Amount : "fail";
+        break;
+      }catch(e){ cur.amzFees[k] = "fail"; if (!e.retry) break; await new Promise(r => setTimeout(r, 1100)); }
+    }
+    if (current === cur){ cur.calc = calc(cur.product, cur.cost); renderScan(); }
+  })();
+  cur.amzFees[k] = job;
+  return job;
 }
 function bookIsbn(){
   const p = current.product, c = String(current.code || "").replace(/[^0-9X]/gi, "");
@@ -821,18 +851,18 @@ function resultHTML(){
   return `
   <div class="verdict ${cls}">
     <div><span class="big num">${money(c.profit)}</span><span class="label">FBA profit</span></div>
-    <div><span class="vword">${c.profit==null ? "—" : c.buy ? "BUY" : "SKIP"}</span>${gateBadge()}<span class="why">${c.buy ? "✓ " : ""}${esc(c.why)}</span>${c.target != null && c.profit != null ? `<span class="target">Target ${money(c.target)} · ${(S.mode==="ev" ? c.expected : c.profit) - c.target >= 0 ? "+" : "−"}${money(Math.abs((S.mode==="ev" ? c.expected : c.profit) - c.target)).replace("-","")}</span>` : ""}</div>
+    <div><span class="vword">${c.profit==null ? "—" : c.buy ? "BUY" : "SKIP"}</span>${gateBadge()}${c.amzSelling ? `<span class="gate bad" title="Amazon itself has an offer">AMAZON SELLING${c.pr.amazon != null ? " " + money(c.pr.amazon) : ""}</span>` : ""}<span class="why">${c.buy ? "✓ " : ""}${esc(c.why)}</span>${c.target != null && c.profit != null ? `<span class="target">Target ${money(c.target)} · ${(S.mode==="ev" ? c.expected : c.profit) - c.target >= 0 ? "+" : "−"}${money(Math.abs((S.mode==="ev" ? c.expected : c.profit) - c.target)).replace("-","")}</span>` : ""}</div>
     <div><input class="costin num" id="cost" inputmode="decimal" value="${(Number(current.cost)||0).toFixed(2)}" aria-label="Buy cost"><span class="label">Buy cost</span></div>
   </div>
   <div class="stats" style="grid-template-columns:1fr 1fr">
-    <div><div class="v num">${kfmt(pr.rank)}</div><small>RANK · ${kfmt(pr.avgRank)} avg 6m</small></div>
+    <div><div class="v num">${kfmt(pr.rank)}</div><small>RANK · ${kfmt(pr.avg90Rank)} 90-day avg${S.rankBy === "avg90" && pr.avg90Rank ? " (used)" : ""}</small></div>
     <div><div class="v num">${pr.pulse}</div><small>SALES PULSE 6M</small></div>
   </div>
   ${buybackHTML()}
   ${rangeHTML()}
   ${tilesHTML()}
   ${offersHTML()}
-  <div class="note" style="margin-top:6px">${c.roi != null ? `ROI ${Math.round(c.roi)}% · ` : ""}Fees ${money(c.fees)} = ${Math.round(c.refPct*100)}% referral${c.closing?" + $1.80 closing":""} + ${money(c.fbaFee)} FBA + ${money(c.lbs*S.inbound)} inbound${S.prep?" + prep":""} · offers: ${pr.countUsed} used / ${pr.countNew} new</div>
+  <div class="note" style="margin-top:6px">${c.roi != null ? `ROI ${Math.round(c.roi)}% · ` : ""}Fees ${money(c.fees)} = ${c.amzFee != null ? `${money(c.amzFee)} Amazon fees (exact)` : `${Math.round(c.refPct*100)}% referral${c.closing?" + $1.80 closing":""} + ${money(c.fbaFee)} FBA (est.)`} + ${money(c.lbs*S.inbound)} inbound${S.prep?" + prep":""} · offers: ${pr.countUsed} used / ${pr.countNew} new</div>
   ${current.gate === "bad" && current.gateMsg ? `<div class="err" style="margin-top:8px">⚠ ${esc(current.gateMsg)}</div>` : ""}
   <div class="links">
     <a class="chip acc" href="lister/?code=${encodeURIComponent(current.code || p.asin)}&cost=${(Number(current.cost)||0).toFixed(2)}${c.sell ? "&price=" + Number(c.sell).toFixed(2) : ""}">List it</a>
@@ -1497,7 +1527,7 @@ async function contLookup(code){
 
   if (navigator.vibrate) navigator.vibrate(c.buy ? [60,40,60] : 120);
   showCamRes(c.buy ? "buy" : "skip", `<span class="w">${c.buy ? "BUY" : "SKIP"}</span><span class="t">${esc(p.title)}</span><span class="p num">${money(c.profit)}</span>
-    <span class="s">${current.gate === "bad" ? "⚠ RESTRICTED · " : ""}${esc(c.why)} · rank ${kfmt(c.pr.rank)} · pulse ${c.pr.pulse} · tap for details</span>`);
+    <span class="s">${current.gate === "bad" ? "⚠ RESTRICTED · " : ""}${c.amzSelling ? "AMAZON SELLING · " : ""}${esc(c.why)} · rank ${kfmt(c.pr.rank)} · pulse ${c.pr.pulse} · tap for details</span>`);
 }
 function setContBtn(){ const b = $("#contBtn"); b.setAttribute("aria-pressed", String(S.cont)); b.textContent = "Continuous: " + (S.cont ? "On" : "Off"); }
 $("#contBtn").onclick = () => { S.cont = !S.cont; save(); setContBtn(); };
@@ -1683,11 +1713,12 @@ function renderSettings(){
     <div class="row" style="margin-top:10px"><span class="grow">Buy box prices (+2 tokens)</span><label class="switch"><input type="checkbox" id="bb" ${S.buybox?"checked":""}><span></span></label></div>
   </div>
   <div class="card"><div class="label" style="margin-bottom:8px">Amazon live offers (free)</div>
-    <div class="note" style="margin-bottom:8px">Uses your Bethany Lister relay: live offers and a restriction check after every scan, 0 Keepa tokens.</div>
+    <div class="note" style="margin-bottom:8px">Uses your Bethany Lister relay: live offers, exact Amazon fees and a restriction check after every scan, 0 Keepa tokens.</div>
     <div class="row"><span class="grow">Get offers from Amazon</span><label class="switch"><input type="checkbox" id="amzOn" ${S.amzOn?"checked":""}><span></span></label></div>
     <div class="field" style="margin-top:8px">Relay (Worker) URL<input id="amzWorker" value="${esc(S.amzWorker)}" autocapitalize="off" autocomplete="off"></div>
     <div class="field" style="margin-top:8px">App key (same as Bethany Lister)<input id="amzKey" type="password" value="${esc(S.amzKey)}" autocapitalize="off" autocomplete="off" placeholder="Paste your APP_KEY"></div>
     <div class="row" style="margin-top:10px"><span class="grow">Always SKIP restricted items</span><label class="switch"><input type="checkbox" id="skipGated" ${S.skipGated?"checked":""}><span></span></label></div>
+    <div class="row" style="margin-top:10px"><span class="grow">SKIP when Amazon is selling</span><label class="switch"><input type="checkbox" id="skipAmazon" ${S.skipAmazon?"checked":""}><span></span></label></div>
     <div class="row" style="margin-top:8px"><button class="mini" id="amzTest">Test</button><span class="note grow" id="amzOut"></span></div>
   </div>
   <div class="card"><div class="label" style="margin-bottom:8px">Costs</div>
@@ -1708,6 +1739,8 @@ function renderSettings(){
   <div class="row" style="margin:14px 0 6px"><h2 class="grow" style="margin:0">FBA triggers</h2><span class="note">${S.mode==="triggers"?"Active":"Off"}</span></div>
   <div class="row card" style="margin-bottom:8px"><span class="grow"><b>Ladder mode</b><br><span class="note">On: a book that misses a tier drops to the next slower tier, which needs more profit. Off: a book must fit a trigger's exact rank and pulse box.</span></span><label class="switch"><input type="checkbox" id="lad" ${S.ladder?"checked":""}><span></span></label></div>
   <div class="note" style="margin-bottom:8px">Checked top to bottom, so keep the fastest tiers first. Red = always skip.</div>
+  <div class="row card" style="margin-bottom:8px"><span class="grow"><b>Judge rank by</b><br><span class="note">Used by triggers and the ROI rule.</span></span>
+    <select id="rankBy" style="width:auto;padding:6px 8px"><option value="avg90" ${S.rankBy==="avg90"?"selected":""}>90-day average</option><option value="now" ${S.rankBy==="now"?"selected":""}>Today's rank</option></select></div>
   <div id="trigs">${S.triggers.map((t,i)=>`<div class="card trig ${t.color==="green"?"":t.color}">
     <div class="row"><input class="grow" data-f="name" data-i="${i}" value="${esc(t.name)}" style="font-weight:700">
       <label class="switch"><input type="checkbox" data-f="on" data-i="${i}" ${t.on?"checked":""}><span></span></label></div>
@@ -1744,6 +1777,8 @@ function renderSettings(){
   $("#ao").onchange = e => { S.autoOffers = e.target.checked; save(); };
   $("#amzOn").onchange = e => { S.amzOn = e.target.checked; save(); };
   $("#skipGated").onchange = e => { S.skipGated = e.target.checked; save(); };
+  $("#skipAmazon").onchange = e => { S.skipAmazon = e.target.checked; save(); };
+  $("#rankBy").onchange = e => { S.rankBy = e.target.value; save(); };
   $("#amzWorker").onchange = e => { S.amzWorker = e.target.value.trim(); save(); };
   $("#amzKey").onchange = e => { S.amzKey = e.target.value.trim(); save(); toast("Amazon key saved"); };
   $("#amzTest").onclick = async () => {
