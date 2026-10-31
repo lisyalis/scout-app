@@ -202,8 +202,13 @@ const S = {
   noteChips: LS.get("noteChips", DEF_CHIPS),
   source: LS.get("source", ""),
   sources: LS.get("sources", []),
+  sp: LS.get("sp", {on: true, undercut: 0.01, minProfit: 3, minRoi: 0, capNew: true, mfShip: 3.99}),
+  importedScout: LS.get("importedScout", []),
+  trips: LS.get("trips", []),
+  mileRate: LS.get("mileRate", ""),
+  agedDays: LS.get("agedDays", 150),
 };
-function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays","statsScope","chartAuto","chartRange","noteChips","source","sources"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["worker","key","channel","cond","skuFba","skuMf","ticket","shelf","notes","listed","labelSize","batchMode","batch","shipFrom","box","boxPage","ship","orders","salesDays","statsScope","chartAuto","chartRange","noteChips","source","sources","sp","importedScout","trips","mileRate","agedDays"]) LS.set(k, S[k]); }
 function rememberSource(src){ if (!src) return; S.sources = [src].concat(S.sources.filter(x => x.toLowerCase() !== src.toLowerCase())).slice(0, 12); save(); }
 // Keepa key is shared with Scout (same site, stored by Scout as scout.key)
 const keepaKey = () => { try { return JSON.parse(localStorage.getItem("scout.key")) || ""; } catch(e){ return ""; } };
@@ -303,7 +308,7 @@ async function lookup(raw){
   item = blankItem(code);
   if (keep){ item.cost = keep.cost; item.price = keep.price; }
   const qs = new URLSearchParams(location.search);
-  if (qs.get("code") === raw){ item.cost = qs.get("cost") || ""; item.price = qs.get("price") || ""; }
+  if (qs.get("code") === raw){ item.cost = qs.get("cost") || ""; item.price = qs.get("price") || ""; if (item.price) item.priceAuto = false; }
   render();
   try {
     if (/^B0[0-9A-Z]{8}$/.test(code)){
@@ -345,27 +350,97 @@ async function loadGate(){
   render();
 }
 
+const parseOffers = d => ((d.payload && d.payload.Offers) || []).map(o => ({
+  price: +(((o.ListingPrice && o.ListingPrice.Amount) || 0) + ((o.Shipping && o.Shipping.Amount) || 0)).toFixed(2),
+  fba: !!o.IsFulfilledByAmazon, sub: String(o.SubCondition || "").replace(/_/g, " "), bb: !!o.IsBuyBoxWinner
+})).sort((a, b) => a.price - b.price);
 async function loadOffers(){
   const it = item, kind = condOf(S.cond).offer;
-  if (it.offers[kind]){ render(); return; }
+  if (it.offers[kind]){ applySmart(); render(); return; }
   it.offersErr = null; it.offersLoading = true; renderSoon();
   try {
     const d = await api(`/offers?asin=${it.asin}&itemCondition=${kind}`);
     if (it !== item) return;
-    const list = ((d.payload && d.payload.Offers) || []).map(o => ({
-      price: +(((o.ListingPrice && o.ListingPrice.Amount) || 0) + ((o.Shipping && o.Shipping.Amount) || 0)).toFixed(2),
-      fba: !!o.IsFulfilledByAmazon, sub: String(o.SubCondition || "").replace(/_/g, " "), bb: !!o.IsBuyBoxWinner
-    })).sort((a, b) => a.price - b.price);
-    it.offers[kind] = list;
-    // default price: lowest offer of the same channel, else lowest overall
-    if (!it.price && list.length){
-      const same = list.find(o => o.fba === (S.channel === "fba")) || list[0];
-      it.price = same.price.toFixed(2);
-      queueFees();
+    it.offers[kind] = parseOffers(d);
+    if (!S.sp.on && !it.price && it.offers[kind].length){
+      const same = it.offers[kind].find(o => o.fba === (S.channel === "fba")) || it.offers[kind][0];
+      it.price = same.price.toFixed(2); queueFees();
     }
   } catch(e){ if (it !== item) return; it.offersErr = e.message; }
   it.offersLoading = false;
-  render();
+  applySmart(); render();
+  // used price shouldn't beat a new FBA copy: get new offers too (Amazon allows ~1 offers call every 2s)
+  if (kind === "Used" && S.sp.on && S.sp.capNew && !it.offers.New){
+    setTimeout(async () => {
+      if (it !== item || it.offers.New) return;
+      try { it.offers.New = parseOffers(await api(`/offers?asin=${it.asin}&itemCondition=New`)); if (it === item){ applySmart(); render(); } } catch(e){}
+    }, 2200);
+  }
+}
+
+// ---------- smart pricing ----------
+const SUBRANK = {"new": 5, "mint": 4, "like new": 4, "very good": 3, "good": 2, "acceptable": 1, "poor": 0};
+const condRank = id => ({new: 5, like_new: 4, very_good: 3, good: 2, acceptable: 1})[id] || 3;
+// works for the open item or a batch import: o = {offers, cond, channel, cost, fees, feesFor}
+function smartPrice(o){
+  const sp = S.sp, fba = o.channel === "fba", kind = condOf(o.cond).offer, mine = condRank(o.cond);
+  const list = o.offers[kind] || [];
+  let target = null, why = "";
+  const better = list.filter(x => (SUBRANK[x.sub] ?? 3) >= mine);
+  if (fba){
+    const fbaComp = better.filter(x => x.fba);
+    if (fbaComp.length){ target = fbaComp[0].price - sp.undercut; why = `${sp.undercut ? "Under" : "Matched"} lowest ${condOf(o.cond).short}-or-better FBA ${money(fbaComp[0].price)}`; }
+    else {
+      const anyFba = list.filter(x => x.fba);
+      const mf = better.filter(x => !x.fba);
+      if (mf.length){ target = mf[0].price; why = `No FBA competition: matched lowest MF ${money(mf[0].price)} (with shipping)`; }
+      else if (anyFba.length){ target = anyFba[0].price; why = `Only lower-condition FBA: matched ${money(anyFba[0].price)}`; }
+    }
+  } else {
+    // MF: buyers compare totals, and your price + Amazon's shipping charge must beat theirs
+    if (better.length){ target = better[0].price - sp.mfShip - sp.undercut; why = `Lowest ${condOf(o.cond).short}-or-better total ${money(better[0].price)} − ${money(sp.mfShip)} shipping${sp.undercut ? " − " + money(sp.undercut) : ""}`; }
+  }
+  // used shouldn't cost more than a new FBA copy
+  if (target != null && kind === "Used" && sp.capNew && o.offers.New){
+    const nf = o.offers.New.filter(x => x.fba)[0];
+    if (nf && target > nf.price - 0.01){ target = nf.price - 0.01; why += ` · capped under new FBA ${money(nf.price)}`; }
+  }
+  // floor: your minimum profit / ROI after Amazon's fees
+  const ref = 0.15;
+  const fixed = o.fees != null && o.feesFor > 0 ? Math.max(0, o.fees - ref * o.feesFor) : (fba ? 1.80 + 3.50 : 1.80);
+  const cost = o.cost || 0;
+  const floor = Math.max(
+    (sp.minProfit + cost + fixed) / (1 - ref),
+    sp.minRoi > 0 ? (cost * (1 + sp.minRoi / 100) + fixed) / (1 - ref) : 0);
+  if (target == null) return {price: +floor.toFixed(2), why: `No competing offers: set at your minimum (${money(sp.minProfit)} profit). You can likely charge more.`, floor: true};
+  if (target < floor) return {price: +floor.toFixed(2), why: why + ` · raised to your minimum ${money(sp.minProfit)} profit`, floor: true};
+  return {price: +Math.max(0.01, target).toFixed(2), why};
+}
+function applySmart(){
+  const it = item; if (!it || !S.sp.on || !it.asin) return;
+  const kind = condOf(S.cond).offer; if (!it.offers[kind]) return;
+  it.smart = smartPrice({offers: it.offers, cond: S.cond, channel: S.channel, cost: parseFloat(it.cost) || 0, fees: it.fees, feesFor: it.feesFor});
+  if (it.priceAuto !== false && it.smart && Math.abs((parseFloat(it.price) || 0) - it.smart.price) >= 0.01){
+    it.price = it.smart.price.toFixed(2); it.priceAuto = true; queueFees();
+  }
+}
+function smartHTML(){
+  if (!S.sp.on || !item || !item.smart) return "";
+  const same = Math.abs((parseFloat(item.price) || 0) - item.smart.price) < 0.01;
+  return `<div class="note" id="smartLine" style="margin-top:4px;${item.smart.floor ? "color:var(--warn)" : ""}">🧠 Smart ${money(item.smart.price)} · ${esc(item.smart.why)}
+    ${same ? "" : ` <button class="mini" id="useSmart" style="margin-left:4px">Use ${money(item.smart.price)}</button>`}</div>`;
+}
+
+function wireSmart(){ const b = $("#useSmart"); if (b) b.onclick = () => { item.priceAuto = true; item.price = item.smart.price.toFixed(2); render(); queueFees(); }; }
+// ---------- already have this book? ----------
+function dupHTML(){
+  if (!item || !item.asin) return "";
+  const mine = live().filter(x => x.asin === item.asin && !x.soldAt);
+  const queued = S.batch.filter(x => x.asin === item.asin && x.state !== "listed");
+  if (!mine.length && !queued.length) return "";
+  const line = x => `${x.channel.toUpperCase()} ${condOf(x.cond).short} ${money(x.price)}${(x.qty || 1) > 1 ? " ×" + x.qty : ""} · ${new Date(x.at).toLocaleDateString()}${x.shippedAt ? " · shipped" : ""}`;
+  return `<div class="gate" style="background:rgba(234,179,8,.14);color:var(--warn)">⚠ You already have ${mine.length + queued.length} of this
+    <span class="msg">${mine.map(line).concat(queued.map(x => "In batch: " + condOf(x.cond).short + " " + money(x.price))).map(esc).join("<br>")}</span></div>`;
 }
 
 function queueFees(){
@@ -381,26 +456,28 @@ async function loadFees(){
     const d = await api(`/fees?asin=${it.asin}&price=${price}&fba=${S.channel === "fba" ? 1 : 0}`);
     if (it !== item) return;
     const est = d.payload && d.payload.FeesEstimateResult;
-    if (est && est.Status === "Success"){ it.fees = est.FeesEstimate.TotalFeesEstimate.Amount; it.feesFor = price; }
+    if (est && est.Status === "Success"){ it.fees = est.FeesEstimate.TotalFeesEstimate.Amount; it.feesFor = price; if (it.priceAuto !== false){ applySmart(); const pi = $("#price"); if (pi && document.activeElement !== pi) pi.value = it.price; const sl = $("#smartLine"); if (sl) sl.outerHTML = smartHTML(); wireSmart(); } }
     else { it.fees = null; it.feesErr = (est && est.Error && est.Error.Message) || "No fee estimate"; }
   } catch(e){ if (it !== item) return; it.fees = null; it.feesErr = e.message; }
   renderMoney();
 }
 
 // ---------- SKU ----------
-function buildSku(){
+function buildSku(o){
+  o = o || {};
   const d = new Date(), p = n => String(n).padStart(2, "0");
   const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
-  const cost = (parseFloat(item && item.cost) || 0).toFixed(2);
-  const pattern = S.channel === "mf" ? S.skuMf : S.skuFba;
+  const cost = (parseFloat(o.cost != null ? o.cost : item && item.cost) || 0).toFixed(2);
+  const chan = o.channel || S.channel, cnd = o.cond || S.cond, tkt = o.ticket || S.ticket, src = o.source != null ? o.source : (item && item.source) || S.source || "";
+  const pattern = chan === "mf" ? S.skuMf : S.skuFba;
   return pattern
     .replace(/\{DATE\}/g, String(d.getFullYear()).slice(2) + p(d.getMonth() + 1) + p(d.getDate()))
-    .replace(/\{COND\}/g, condOf(S.cond).short)
+    .replace(/\{COND\}/g, condOf(cnd).short)
     .replace(/\{COST\}/g, cost)
     .replace(/\{RAND\}/g, rand)
-    .replace(/\{TICKET\}/g, String(S.ticket).padStart(5, "0"))
+    .replace(/\{TICKET\}/g, String(tkt).padStart(5, "0"))
     .replace(/\{SHELF\}/g, S.shelf)
-    .replace(/\{SRC\}/g, ((item && item.source) || S.source || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))
+    .replace(/\{SRC\}/g, String(src).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6))
     .replace(/\s+/g, "").slice(0, 40);
 }
 function ticketTaken(n){ return S.listed.some(x => x.channel === "mf" && x.ticket === n) || S.batch.some(x => x.channel === "mf" && x.ticket === n && x.state !== "listed"); }
@@ -468,7 +545,7 @@ async function listAll(){
   for (const sn of todo){
     sn.state = "listing"; sn.msg = ""; renderBatch();
     const r = await listOne(sn);
-    if (r.ok){ sn.state = "listed"; } else { sn.state = "error"; sn.msg = r.msgs.join(" "); }
+    if (r.ok){ sn.state = "listed"; if (sn.fromScout) markScout(sn.fromScout, "listed"); } else { sn.state = "error"; sn.msg = r.msgs.join(" "); }
     save(); renderBatch();
     await new Promise(res => setTimeout(res, 300));
   }
@@ -476,9 +553,49 @@ async function listAll(){
   const okN = todo.filter(x => x.state === "listed").length, errN = todo.length - okN;
   toast(`Listed ${okN}` + (errN ? ` · ${errN} need fixing` : ""));
 }
+// ---------- Scout → Lister: books you tapped "Add to inventory" in Scout ----------
+const scoutInv = () => { try { return JSON.parse(localStorage.getItem("scout.inv")) || []; } catch(e){ return []; } };
+const scoutPending = () => scoutInv().filter(x => x.status === "bought" && !S.importedScout.includes(x.t));
+function markScout(t, status){
+  try { const inv = scoutInv(); const x = inv.find(y => y.t === t); if (x){ x.status = status; localStorage.setItem("scout.inv", JSON.stringify(inv)); } } catch(e){}
+}
+let importing = null;
+async function importScout(){
+  if (importing) return;
+  const list = scoutPending(); if (!list.length) return;
+  importing = {done: 0, total: list.length}; renderBatch();
+  for (const x of list){
+    try {
+      const cond = x.cond === "new" ? "new" : (S.cond === "new" ? "very_good" : S.cond);
+      let info = {asin: x.asin, title: x.title, img: x.img || ""};
+      try { const d = await api("/lookup?code=" + encodeURIComponent(x.asin)); const m = (d.items || []).map(mapCatalog).find(y => y.asin === x.asin) || (d.items || []).map(mapCatalog)[0]; if (m) info = {...info, ...m}; } catch(e){}
+      const offers = {};
+      try { offers[condOf(cond).offer] = parseOffers(await api(`/offers?asin=${info.asin}&itemCondition=${condOf(cond).offer}`)); } catch(e){}
+      const sn = {code: x.asin, asin: info.asin, title: info.title, img: info.img, productType: info.productType || null, rank: info.rank || null, pkgWeight: info.pkgWeight || null,
+        cond, channel: S.channel, cost: Number(x.cost) || 0, note: notesFor(cond)[0] || "", qty: 1, source: S.source, fees: null, fromScout: x.t};
+      let price = Number(x.sell) || 0, why = "Scout's sell price";
+      if (S.sp.on && offers[condOf(cond).offer]){ const sm = smartPrice({offers, cond, channel: S.channel, cost: sn.cost}); price = sm.price; why = sm.why; }
+      sn.price = +price.toFixed(2); sn.why = why;
+      sn.ticket = S.channel === "mf" ? S.ticket : null; sn.shelf = S.channel === "mf" ? S.shelf : null;
+      sn.sku = buildSku({cost: sn.cost, cond, channel: S.channel, ticket: sn.ticket, source: sn.source});
+      sn.state = price > 0 ? "ready" : "error"; if (!(price > 0)) sn.msg = "No price found: remove and scan it to list";
+      S.batch.push(sn); if (S.channel === "mf") nextTicket();
+      S.importedScout = S.importedScout.concat([x.t]).slice(-500);
+      save();
+    } catch(e){}
+    importing.done++; renderBatch();
+    await new Promise(r => setTimeout(r, 2200));   // Amazon allows about one offers lookup every 2 seconds
+  }
+  importing = null; S.batchMode = true; save(); render();
+  toast("Imported from Scout. Check prices, then List all.");
+}
 function batchEntries(){ return S.batch.filter(x => x.state === "listed").map(x => S.listed.find(e => e.sku === x.sku)).filter(Boolean); }
 function batchHTML(){
-  if (!S.batch.length) return "";
+  const sp = scoutPending().length;
+  const imp = importing ? `<div class="card" id="batchPanel"><span class="spin"></span> Importing from Scout… ${importing.done} of ${importing.total}</div>` : "";
+  if (importing) return imp;
+  if (!S.batch.length) return sp ? `<div class="card" id="batchPanel"><b>${sp} book${sp > 1 ? "s" : ""} from Scout</b> <span class="note">· the ones you tapped Add to inventory</span>
+    <button class="btn pri" id="bImport" style="width:100%;margin-top:8px">Import ${sp} into a batch</button></div>` : "";
   const open = S.batch.filter(x => x.state !== "listed").length;
   const done = batchEntries();
   const ready = done.filter(e => e.channel === "mf" || (e.status && e.status.fnsku)).length;
@@ -490,11 +607,14 @@ function batchHTML(){
     return `<div class="item" style="margin-top:6px;padding:8px 10px">
       <div class="row"><b style="width:18px">${icon}</b><div style="flex:1;min-width:0"><div class="t">${esc(x.title)}</div>
         <div class="m"><span class="tag ${x.channel}">${x.channel.toUpperCase()}</span> ${condOf(x.cond).short} · ${money(x.price)} · cost ${money(x.cost)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")}` : ""}${e && e.status && e.status.fnsku ? ` · ${esc(e.status.fnsku)}` : ""}</div>
-        ${x.msg ? `<div class="m neg">${esc(x.msg)}</div>` : ""}</div>
-        ${x.state !== "listed" && x.state !== "listing" ? `<button class="mini" data-brm="${i}" aria-label="Remove">✕</button>` : ""}</div></div>`;
+        ${x.msg ? `<div class="m neg">${esc(x.msg)}</div>` : ""}
+        ${x.why && x.state === "ready" ? `<div class="m">${x.fromScout ? "From Scout · " : ""}${esc(x.why)}</div>` : ""}</div>
+        ${x.state !== "listed" && x.state !== "listing" ? `<input data-bprice="${i}" class="num" inputmode="decimal" value="${(x.price || 0).toFixed(2)}" aria-label="Price" style="width:74px;padding:6px">
+          <button class="mini" data-brm="${i}" aria-label="Remove">✕</button>` : ""}</div></div>`;
   };
   return `<div class="card" id="batchPanel">
     <div class="row" style="justify-content:space-between"><b>Batch · ${S.batch.length} books · ${money(val)}</b><button class="mini" id="bClear">Clear done</button></div>
+    ${sp ? `<button class="mini" id="bImport" style="margin-top:6px;border-color:var(--accent);color:var(--accent)">+ Import ${sp} from Scout</button>` : ""}
     ${S.batch.map(row).join("")}
     <div class="row" style="margin-top:10px">
       <button class="btn pri" id="bList" style="flex:1" ${open && !batchBusy ? "" : "disabled"}>${batchBusy ? '<span class="spin"></span> Listing…' : `List all (${open})`}</button>
@@ -512,7 +632,13 @@ function renderBatch(){
 }
 function wireBatch(){
   if (!$("#batchPanel")) return;
+  if ($("#bImport")) $("#bImport").onclick = importScout;
+  if (!$("#bList")) return;
   document.querySelectorAll("[data-brm]").forEach(b => b.onclick = () => { S.batch.splice(+b.dataset.brm, 1); save(); renderBatch(); });
+  document.querySelectorAll("[data-bprice]").forEach(inp => inp.onchange = () => {
+    const x = S.batch[+inp.dataset.bprice], v = parseFloat(inp.value); if (!x) return;
+    if (v > 0 && Math.abs(v - (x.price || 0)) >= 0.005){ x.price = +v.toFixed(2); x.why = "Your price"; if (x.state === "error" && /No price/.test(x.msg || "")){ x.state = "ready"; x.msg = ""; } save(); refreshStats(); }   // no redraw here: it would fight the tap that blurred this box
+  });
   $("#bClear").onclick = () => { S.batch = S.batch.filter(x => x.state !== "listed"); save(); renderBatch(); };
   $("#bList").onclick = listAll;
   $("#bPrint").onclick = () => printAll(batchEntries());
@@ -524,8 +650,9 @@ function syncSoon(){ clearTimeout(syncTimer); syncTimer = setTimeout(sync, 800);
 async function sync(){
   if (!S.worker || !S.key) return;
   try {
-    const d = await api("/sync", {method: "POST", body: JSON.stringify({listed: S.listed, ticket: S.ticket})});
+    const d = await api("/sync", {method: "POST", body: JSON.stringify({listed: S.listed, ticket: S.ticket, trips: S.trips})});
     S.listed = d.listed || S.listed;
+    if (Array.isArray(d.trips)) S.trips = d.trips;
     S.ticket = Math.max(S.ticket, d.ticket || 1);
     while (ticketTaken(S.ticket)) S.ticket++;
     save();
@@ -535,6 +662,7 @@ async function sync(){
   }
   LS.set("syncInfo", syncInfo);
   if (tab === "listed" && !editing) renderListed();
+  if (tab === "sales") renderSalesSoon();
 }
 function syncLine(){
   if (!syncInfo) return "Not synced yet";
@@ -965,12 +1093,14 @@ function renderList(){
         </div>
         ${item.matches.length > 1 ? `<div class="label" style="margin-top:10px">Other matches</div><div class="matches">${item.matches.map((x, i) => `<button data-m="${i}">${esc(x.title)}</button>`).join("")}</div>` : ""}
         ${gateHTML()}
+        ${dupHTML()}
         ${chartHTML()}
       </div>
       <div class="label" style="margin-top:14px">Condition</div>
       <div class="seg wide" id="conds" style="margin-top:6px">${CONDS.map(c => `<button data-c="${c.id}" aria-pressed="${S.cond === c.id}">${c.short}</button>`).join("")}</div>
       ${offersHTML()}
       <label class="field" style="margin-top:10px">Your price<input id="price" class="num" inputmode="decimal" value="${esc(item.price)}" placeholder="0.00"></label>
+      ${smartHTML()}
       <div class="grid3" style="grid-template-columns:1fr 1.4fr .7fr">
         <label class="field">Buy cost<input id="cost" class="num" inputmode="decimal" value="${esc(item.cost)}" placeholder="0.00"></label>
         <label class="field">Source<input id="source" list="srcList" value="${esc(item.source)}" placeholder="Goodwill, library sale…" autocomplete="off">
@@ -1035,7 +1165,7 @@ function wireList(){
   document.querySelectorAll("[data-res]").forEach(b => b.onclick = () => pickResult(+b.dataset.res));
   document.querySelectorAll("#chan button").forEach(b => b.onclick = () => {
     S.channel = b.dataset.ch; save();
-    if (item && !item.loading && !item.err){ item.sku = buildSku(); item.result = null; queueFees(); }
+    if (item && !item.loading && !item.err){ item.sku = buildSku(); item.result = null; item.fees = null; applySmart(); queueFees(); }
     render();
   });
   if (!item || item.loading || item.err) return;
@@ -1044,12 +1174,14 @@ function wireList(){
     const was = notesFor(S.cond)[0] || "";
     S.cond = b.dataset.c; save();
     if (!item.note.trim() || item.note === was) item.note = notesFor(S.cond)[0] || "";
-    item.sku = buildSku(); item.result = null;
+    item.sku = buildSku(); item.result = null; item.fees = null;
     render(); loadGate(); loadOffers();
   });
-  document.querySelectorAll("[data-price]").forEach(b => b.onclick = () => { item.price = b.dataset.price; render(); queueFees(); });
-  $("#price").oninput = e => { item.price = e.target.value; queueFees(); renderMoney(); };
+  document.querySelectorAll("[data-price]").forEach(b => b.onclick = () => { item.price = b.dataset.price; item.priceAuto = false; render(); queueFees(); });
+  $("#price").oninput = e => { item.price = e.target.value; item.priceAuto = false; queueFees(); renderMoney(); const sl = $("#smartLine"); if (sl){ sl.outerHTML = smartHTML(); wireSmart(); } };
+  wireSmart();
   $("#cost").oninput = e => { item.cost = e.target.value; renderMoney(); };
+  $("#cost").addEventListener("change", () => { if (item.priceAuto !== false){ applySmart(); render(); } });
   $("#cost").onchange = () => { if (/\{COST\}/.test(S.channel === "mf" ? S.skuMf : S.skuFba)){ item.sku = buildSku(); $("#sku").value = item.sku; } };
   if ($("#qty")) $("#qty").oninput = e => { item.qty = e.target.value; renderMoney(); };
   $("#source").oninput = e => { item.source = e.target.value; };
@@ -1085,10 +1217,21 @@ function wireList(){
 
 let editing = null;
 const scLink = x => `https://sellercentral.amazon.com/myinventory/inventory?searchField=all&searchTerm=${encodeURIComponent(x.sku)}`;
+// ---------- aged inventory: FBA books that haven't sold ----------
+// Amazon starts charging an aged-inventory surcharge at about 6 months (181+ days) in its warehouse
+const ageDays = x => Math.floor((Date.now() - (x.shippedAt || x.at)) / 864e5);
+const isAged = x => x.channel === "fba" && !x.soldAt && !x.deleted && ageDays(x) >= S.agedDays;
+function agedTag(x){
+  if (!isAged(x)) return "";
+  const d = ageDays(x);
+  return ` · <b style="color:${d >= 181 ? "var(--skip)" : "var(--warn)"}">${d >= 181 ? "AGED " + d + "d · storage surcharge" : "AGING " + d + "d"}</b>`;
+}
+let listedFilter = "all";
 function renderListed(){
   const q = (LS.get("q", "") || "").toLowerCase();
   const all = live();
-  const rows = all.filter(x => !q || [x.title, x.sku, x.asin, x.code, x.shelf, x.ticket, x.source].join(" ").toLowerCase().includes(q));
+  const aged = all.filter(isAged);
+  const rows = all.filter(x => (listedFilter !== "aged" || isAged(x)) && (!q || [x.title, x.sku, x.asin, x.code, x.shelf, x.ticket, x.source].join(" ").toLowerCase().includes(q)));
   const total = rows.reduce((a, x) => a + x.price, 0);
   const today = new Date().toDateString();
   const todays = all.filter(x => new Date(x.at).toDateString() === today);
@@ -1096,6 +1239,9 @@ function renderListed(){
   $("#main").innerHTML = `
     <h2>Listed (${all.length})</h2>
     <div class="row"><input id="q" placeholder="Search title, SKU, source, ticket, shelf" value="${esc(q)}"><button class="mini" id="csv">CSV</button></div>
+    ${aged.length ? `<div class="gate" style="background:rgba(229,83,75,.12);color:var(--skip);margin-top:8px">⏳ ${aged.length} FBA book${aged.length > 1 ? "s" : ""} unsold ${S.agedDays}+ days
+      <button class="mini" id="agedTog" style="margin-left:auto">${listedFilter === "aged" ? "Show all" : "Show them"}</button>
+      <span class="msg">Lower the price, or remove them before Amazon's aged-inventory surcharge (about 6 months). Refresh Sales first so sold books drop off.</span></div>` : ""}
     <div class="note" style="margin-top:6px">${rows.length} items · ${money(total)} listed value</div>
     <div class="note row" style="margin-top:4px;justify-content:space-between"><span>${syncLine()}</span><button class="mini" id="syncNow">Sync now</button></div>
     ${todays.length ? `<button class="btn" id="printToday" style="width:100%;margin-top:10px" ${todayReady ? "" : "disabled"}>Print today's labels & tickets (${todayReady} of ${todays.length} ready)</button>` : ""}
@@ -1103,7 +1249,7 @@ function renderListed(){
       <div class="item">
         <div class="t">${esc(x.title)}</div>
         <div class="m"><span class="tag ${x.channel === "fba" ? "fba" : "mf"}">${x.channel.toUpperCase()}</span>
-          ${condOf(x.cond).short} · ${money(x.price)}${(x.qty || 1) > 1 ? ` ×${x.qty}` : ""} · cost ${money(x.cost)}${x.source ? ` · ${esc(x.source)}` : ""} · ${new Date(x.at).toLocaleDateString()}${x.soldAt ? ' · <b class="pos">SOLD</b>' : x.shippedAt ? ' · <b style="color:var(--blue)">SHIPPED</b>' : ""}</div>
+          ${condOf(x.cond).short} · ${money(x.price)}${(x.qty || 1) > 1 ? ` ×${x.qty}` : ""} · cost ${money(x.cost)}${x.source ? ` · ${esc(x.source)}` : ""} · ${new Date(x.at).toLocaleDateString()}${x.soldAt ? ' · <b class="pos">SOLD</b>' : x.shippedAt ? ' · <b style="color:var(--blue)">SHIPPED</b>' : ""}${agedTag(x)}</div>
         <div class="m num">${esc(x.sku)}${x.ticket ? ` · #${String(x.ticket).padStart(5, "0")} · shelf ${esc(x.shelf)}` : ""}</div>
         <div data-st="${esc(x.sku)}">${statusHTML(x.status)}</div>
         ${editing === x.sku ? `
@@ -1127,6 +1273,7 @@ function renderListed(){
   const find = sku => S.listed.find(x => x.sku === sku);
   $("#q").oninput = e => { LS.set("q", e.target.value); const p = e.target.selectionStart; renderListed(); const n = $("#q"); n.focus(); n.setSelectionRange(p, p); };
   $("#csv").onclick = exportCsv;
+  if ($("#agedTog")) $("#agedTog").onclick = () => { listedFilter = listedFilter === "aged" ? "all" : "aged"; renderListed(); };
   $("#syncNow").onclick = e => { e.currentTarget.innerHTML = '<span class="spin"></span>'; sync(); };
   if ($("#printToday")) $("#printToday").onclick = () => printAll(todays);
   document.querySelectorAll("[data-check]").forEach(b => b.onclick = async () => {
@@ -1207,6 +1354,22 @@ function renderSettings(){
     <div class="row" style="margin-top:10px"><button class="btn pri" id="test" style="flex:1">Test connection</button></div>
     <div class="note" id="testRes" style="margin-top:6px"></div>
 
+    <h2>Smart pricing</h2>
+    <label class="row" style="gap:10px"><input type="checkbox" id="spOn" ${S.sp.on ? "checked" : ""} style="width:22px;height:22px;flex:none"><span>Fill in the price for me</span></label>
+    <div class="grid3">
+      <label class="field">Undercut by $<input id="spUnder" class="num" inputmode="decimal" value="${S.sp.undercut}"></label>
+      <label class="field">Min profit $<input id="spMin" class="num" inputmode="decimal" value="${S.sp.minProfit}"></label>
+      <label class="field">Min ROI %<input id="spRoi" class="num" inputmode="decimal" value="${S.sp.minRoi}"></label>
+    </div>
+    <label class="row" style="gap:10px;margin-top:10px"><input type="checkbox" id="spCap" ${S.sp.capNew ? "checked" : ""} style="width:22px;height:22px;flex:none"><span>Keep used below the lowest new FBA price</span></label>
+    <div class="note" style="margin-top:6px">FBA: matches the lowest FBA offer in your condition or better, minus the undercut. MF: beats the lowest total after Amazon's ${money(S.sp.mfShip)} book shipping. Never goes below your minimum. Tapping an offer or typing a price turns it off for that book. Use 0 to match instead of undercut.</div>
+
+    <h2>Trips & aging</h2>
+    <div class="grid2" style="margin-top:0">
+      <label class="field">Mileage rate $/mi (blank = IRS rate)<input id="sMile" class="num" inputmode="decimal" value="${esc(S.mileRate)}" placeholder="0.76"></label>
+      <label class="field">Flag FBA books unsold after (days)<input id="sAged" class="num" inputmode="numeric" value="${S.agedDays}"></label>
+    </div>
+
     <h2>Keepa</h2>
     <label class="field">Keepa API key (shared with Scout)<input id="sKeepa" type="password" value="${esc(keepaKey())}" autocapitalize="off" autocomplete="off"></label>
     <label class="row" style="margin-top:10px;gap:10px"><input type="checkbox" id="sChart" ${S.chartAuto ? "checked" : ""} style="width:22px;height:22px;flex:none"><span>Show the Keepa chart on every scan <span class="note">(about 1 token each; off = tap to load)</span></span></label>
@@ -1260,6 +1423,11 @@ function renderSettings(){
   $("#sKey").onchange = e => { S.key = e.target.value.trim(); save(); };
   $("#sChips").onchange = e => { const l = e.target.value.split("\n").map(x => x.trim()).filter(Boolean).map(x => /[.!?]$/.test(x) ? x : x + "."); S.noteChips = l.length ? l : DEF_CHIPS; save(); };
   $("#chipsReset").onclick = () => { S.noteChips = DEF_CHIPS; save(); renderSettings(); };
+  $("#sMile").onchange = e => { S.mileRate = e.target.value.trim(); save(); };
+  $("#sAged").onchange = e => { const v = parseInt(e.target.value); if (v > 0){ S.agedDays = v; save(); } };
+  $("#spOn").onchange = e => { S.sp = {...S.sp, on: e.target.checked}; save(); };
+  $("#spCap").onchange = e => { S.sp = {...S.sp, capNew: e.target.checked}; save(); };
+  [["#spUnder","undercut"],["#spMin","minProfit"],["#spRoi","minRoi"]].forEach(([id, k]) => $(id).onchange = e => { const v = parseFloat(e.target.value); if (v >= 0){ S.sp = {...S.sp, [k]: v}; save(); } });
   $("#sKeepa").onchange = e => { try { localStorage.setItem("scout.key", JSON.stringify(e.target.value.trim())); } catch(err){} };
   $("#sChart").onchange = e => { S.chartAuto = e.target.checked; save(); };
   $("#sFba").onchange = e => { S.skuFba = e.target.value.trim() || "{DATE}-{COND}-{COST}-{RAND}"; save(); };
@@ -1611,6 +1779,88 @@ async function loadSales(){
   } catch(e){ salesMsg = e.status === 404 && e.message === "not found" ? "Update the Worker first." : "Couldn't load sales: " + e.message; }
   salesBusy = false; renderSalesSoon();
 }
+// ---------- sourcing trips & results by source ----------
+// IRS business mileage rate (2026: 72.5¢ through June 30, 76¢ from July 1). Override in the box if you like.
+function mileRate(date){
+  if (S.mileRate !== "" && !isNaN(parseFloat(S.mileRate))) return parseFloat(S.mileRate);
+  const d = String(date || "");
+  if (d >= "2026-07-01") return 0.76;
+  if (d >= "2026-01-01") return 0.725;
+  if (d >= "2025-01-01") return 0.70;
+  return 0.76;
+}
+const liveTrips = () => S.trips.filter(t => !t.deleted);
+function soldLines(){
+  const out = [];
+  for (const o of Object.values(S.orders)){
+    if (o.status === "Canceled") continue;
+    const items = o.items || []; const itemTotal = items.reduce((a, i) => a + i.price, 0) || 1;
+    for (const i of items){
+      const e = S.listed.find(x => x.sku === i.sku);
+      const fees = o.fees != null ? o.fees * (i.price / itemTotal) : (e && e.fees != null ? e.fees * (i.qty || 1) : null);
+      out.push({e, price: i.price, qty: i.qty || 1, fees, cost: e ? e.cost * (i.qty || 1) : null});
+    }
+  }
+  return out;
+}
+function sourcesHTML(){
+  const by = {};
+  const get = k => by[k] = by[k] || {name: k, books: 0, spent: 0, value: 0, sold: 0, sales: 0, profit: 0, miles: 0, mileage: 0, other: 0};
+  for (const x of live()){ const r = get(x.source || "(no source)"); r.books += x.qty || 1; r.spent += (x.cost || 0) * (x.qty || 1); r.value += (x.price || 0) * (x.qty || 1); }
+  for (const l of soldLines()){ if (!l.e) continue; const r = get(l.e.source || "(no source)"); r.sold += l.qty; r.sales += l.price; if (l.fees != null) r.profit += l.price - l.fees - (l.cost || 0); }
+  for (const t of liveTrips()){ const r = get(t.source || "(no source)"); r.miles += +t.miles || 0; r.mileage += (+t.miles || 0) * mileRate(t.date); r.other += +t.spend || 0; }
+  const rows = Object.values(by).map(r => ({...r, net: r.profit - r.mileage - r.other})).sort((a, b) => b.net - a.net);
+  if (!rows.length) return "";
+  return `<h2>By source</h2><div class="note">Net = profit on sold books − mileage − trip spending. Unsold books count toward spent and listed value only.</div>
+    <div class="list">${rows.map(r => `<div class="item">
+      <div class="row" style="justify-content:space-between"><b>${esc(r.name)}</b><b class="num ${r.net >= 0 ? "pos" : "neg"}">${money(r.net)}</b></div>
+      <div class="m">${r.books} books · spent ${money(r.spent)} · listed ${money(r.value)} · sold ${r.sold} for ${money(r.sales)} · profit ${money(r.profit)}</div>
+      ${r.miles || r.other ? `<div class="m">${r.miles} mi (${money(r.mileage)}) · other ${money(r.other)}</div>` : ""}
+    </div>`).join("")}</div>`;
+}
+function tripsHTML(){
+  const ts = liveTrips().slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const yr = new Date().getFullYear() + "";
+  const miles = ts.filter(t => String(t.date).startsWith(yr)).reduce((a, t) => a + (+t.miles || 0), 0);
+  const ded = ts.filter(t => String(t.date).startsWith(yr)).reduce((a, t) => a + (+t.miles || 0) * mileRate(t.date), 0);
+  return `<h2>Sourcing trips</h2>
+    <div class="card">
+      <div class="grid2" style="margin-top:0">
+        <label class="field">Date<input id="tDate" type="date" value="${new Date().toLocaleDateString("en-CA")}"></label>
+        <label class="field">Source<input id="tSrc" list="tSrcList" value="${esc(S.source)}" autocomplete="off"><datalist id="tSrcList">${S.sources.map(x => `<option value="${esc(x)}">`).join("")}</datalist></label>
+      </div>
+      <div class="grid3">
+        <label class="field">Miles (round trip)<input id="tMiles" class="num" inputmode="decimal" placeholder="0"></label>
+        <label class="field">Other spend $<input id="tSpend" class="num" inputmode="decimal" placeholder="0.00"></label>
+        <label class="field">Note<input id="tNote" placeholder="parking, entry fee…"></label>
+      </div>
+      <button class="btn pri" id="tAdd" style="width:100%;margin-top:10px">Add trip</button>
+      <div class="note" style="margin-top:6px">Buy costs come from your listings, so "other spend" is just extras like entry fees, parking or bags.</div>
+    </div>
+    <div class="note" style="margin-top:6px">${yr}: ${miles} miles · about ${money(ded)} at the IRS business rate ${S.mileRate !== "" ? "(your rate)" : "(72.5¢ Jan–Jun, 76¢ from July)"} · <a href="#" id="tCsv" style="color:var(--blue)">Export CSV</a></div>
+    <div class="list">${ts.map(t => `<div class="item row" style="justify-content:space-between">
+      <div style="min-width:0"><div class="t">${esc(t.source || "(no source)")}</div><div class="m">${esc(t.date)} · ${+t.miles || 0} mi · ${money((+t.miles || 0) * mileRate(t.date))}${+t.spend ? " · other " + money(+t.spend) : ""}${t.note ? " · " + esc(t.note) : ""}</div></div>
+      <button class="mini" data-tdel="${esc(t.id)}" aria-label="Delete trip">✕</button></div>`).join("")}</div>`;
+}
+function wireTrips(){
+  if (!$("#tAdd")) return;
+  $("#tAdd").onclick = () => {
+    const t = {id: "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), date: $("#tDate").value || new Date().toLocaleDateString("en-CA"),
+      source: $("#tSrc").value.trim(), miles: parseFloat($("#tMiles").value) || 0, spend: parseFloat($("#tSpend").value) || 0, note: $("#tNote").value.trim(), at: Date.now()};
+    if (!t.miles && !t.spend){ toast("Enter miles or spend"); return; }
+    t.editedAt = t.at; S.trips = [t].concat(S.trips); rememberSource(t.source); save(); syncSoon(); toast("Trip added"); renderSales();
+  };
+  document.querySelectorAll("[data-tdel]").forEach(b => b.onclick = () => {
+    const t = S.trips.find(x => x.id === b.dataset.tdel); if (!t || !confirm("Delete this trip?")) return;
+    t.deleted = true; t.editedAt = Date.now(); save(); syncSoon(); renderSales();
+  });
+  $("#tCsv").onclick = e => {
+    e.preventDefault();
+    const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = [["date","source","miles","rate","mileage","other_spend","note"].join(",")].concat(liveTrips().map(t => [t.date, t.source, t.miles, mileRate(t.date), ((+t.miles || 0) * mileRate(t.date)).toFixed(2), t.spend, t.note].map(q).join(",")));
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([lines.join("\n")], {type: "text/csv"})); a.download = "bethany-trips.csv"; a.click();
+  };
+}
 let salesSoon = 0;
 function renderSalesSoon(){ if (tab !== "sales") return; cancelAnimationFrame(salesSoon); salesSoon = requestAnimationFrame(renderSales); }
 function renderSales(){
@@ -1655,6 +1905,8 @@ function renderSales(){
         <div class="m"><span class="tag ${l.o.channel === "AFN" ? "fba" : "mf"}">${l.o.channel === "AFN" ? "FBA" : "MF"}</span> ${new Date(l.o.date).toLocaleDateString()} · ${esc(l.o.status)} · <span class="num">${esc(l.i.sku)}</span></div>
         <div class="m">Price ${money(l.i.price)} · fees ${l.fees != null ? money(l.fees) : "pending"} · cost ${l.cost != null ? money(l.cost) : "—"} · <b class="${l.profit == null ? "" : l.profit >= 0 ? "pos" : "neg"}">profit ${money(l.profit)}</b></div>
       </div>`).join("") || `<div class="note" style="margin-top:12px">${salesBusy ? "" : "No orders in this period yet."}</div>`}</div>`;
+  $("#main").insertAdjacentHTML("beforeend", sourcesHTML() + tripsHTML());
+  wireTrips();
   $("#sDays").onchange = e => { S.salesDays = +e.target.value; save(); renderSales(); loadSales(); };
   $("#sLoad").onclick = loadSales;
 }
