@@ -281,7 +281,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-10-31d";
+const APP_VERSION = "2026-11-01a";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -325,7 +325,11 @@ const S = {
   amzOn:     LS.get("amzOn", true),
   skipGated: LS.get("skipGated", true),     // restricted items always SKIP
   skipAmazon: LS.get("skipAmazon", false),  // SKIP when Amazon itself is selling
-  rankBy:   LS.get("rankBy", "avg90"),      // avg90 | now : which rank the rules use  // barcode | text (live ISBN reading)
+  rankBy:   LS.get("rankBy", "avg90"),
+  pending:  LS.get("pending", []),         // offline buy-list finds to recheck
+  blQuery:  LS.get("blQuery", ""),
+  blDate:   LS.get("blDate", null),
+  blCount:  LS.get("blCount", 0),      // avg90 | now : which rank the rules use  // barcode | text (live ISBN reading)
   ladder:   LS.get("ladder", true),        // triggers fall through to slower tiers
   roi:      LS.get("roi", {minProfit:5, minRoi:50, maxRank:6000000, minPulse:6}), // live offers cost ~12 tokens per scan
   history:  LS.get("history", []),
@@ -342,7 +346,7 @@ if (!LS.get("addedSlow", false)){
   }
   LS.set("addedSlow", true); LS.set("triggers", S.triggers);
 }
-function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","sound","amzWorker","amzKey","amzOn","skipGated","skipAmazon","rankBy","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
+function save(){ for (const k of ["key","mode","cond","triggers","ev","inbound","prep","defCost","buybox","autoOffers","cont","camMode","sound","amzWorker","amzKey","amzOn","skipGated","skipAmazon","rankBy","pending","blQuery","blDate","blCount","ladder","roi","history","inv","tokens"]) LS.set(k, S[k]); }
 
 /* ============ helpers ============ */
 const $ = s => document.querySelector(s);
@@ -371,6 +375,8 @@ async function lookup(raw){
   const q = String(raw||"").trim().replace(/[^0-9A-Za-z]/g,"").toUpperCase();
   if (!q) return;
   if (!S.key){ renderScan("Add your Keepa API key in Settings first."); return; }
+  offlineHit = null;
+  if (!navigator.onLine && buyList){ current = null; const r = offlineResult(q); renderScan(); return {ok:false, offline:r}; }
   if (lookupCtl) lookupCtl.abort();          // drop any lookup still hanging
   const ctl = lookupCtl = new AbortController();
   const timer = setTimeout(() => ctl.abort("timeout"), 20000);
@@ -425,6 +431,7 @@ async function lookup(raw){
     } else if (msg === "Failed to fetch" || msg === "Load failed"){
       msg = "Couldn't reach Keepa. Check your connection and scan again.";
     }
+    if (buyList && buyList.size && isOfflineErr(msg)){ current = null; const r = offlineResult(q); renderScan(); return {ok:false, offline:r}; }
     renderScan(msg);
     save();
     return {ok:false, error:msg};
@@ -432,6 +439,131 @@ async function lookup(raw){
     clearTimeout(timer); clearInterval(secTimer);
     if (ctl === lookupCtl) lookupCtl = null;
   }
+}
+/* ============ offline buy list (Keepa Product Finder) ============ */
+// The list is the ASINs that match your Product Finder rules. For books the ASIN is the ISBN-10,
+// so a scanned ISBN-13 can be matched with no signal at all.
+const BL_DEFAULT_QUERY = `{
+  "productType": ["0"],
+  "current_SALES_gte": 1,
+  "current_SALES_lte": 6000000,
+  "avg365_SALES_gte": 1,
+  "avg365_SALES_lte": 6000000,
+  "salesRankDrops180_gte": 3,
+  "current_BUY_BOX_USED_SHIPPING_gte": 1500,
+  "current_USED_gte": 1500,
+  "avg365_USED_gte": 1500,
+  "rootCategory": ["283155"]
+}`;
+const idb = {
+  db: null,
+  open(){ return this.db ? Promise.resolve(this.db) : new Promise((ok, bad) => { const r = indexedDB.open("scout", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => { this.db = r.result; ok(r.result); }; r.onerror = () => bad(r.error); }); },
+  async get(k){ const db = await this.open(); return new Promise((ok, bad) => { const q = db.transaction("kv").objectStore("kv").get(k); q.onsuccess = () => ok(q.result); q.onerror = () => bad(q.error); }); },
+  async set(k, v){ const db = await this.open(); return new Promise((ok, bad) => { const t = db.transaction("kv", "readwrite"); t.objectStore("kv").put(v, k); t.oncomplete = () => ok(); t.onerror = () => bad(t.error); }); }
+};
+let buyList = null;            // Set of ASINs
+let blJob = null;              // {status} while downloading
+async function loadBuyList(){ try { const a = await idb.get("buyList"); buyList = new Set(a || []); } catch(e){ buyList = new Set(); } }
+function isbn13to10(s){
+  if (!/^978[0-9]{10}$/.test(s)) return null;
+  const core = s.slice(3, 12); let t = 0; for (let i = 0; i < 9; i++) t += (+core[i])*(10-i);
+  const c = (11 - t % 11) % 11; return core + (c === 10 ? "X" : String(c));
+}
+function blCheck(code){
+  const c = String(code).replace(/[^0-9X]/gi, "").toUpperCase();
+  const asin = c.length === 13 ? isbn13to10(c) : c;
+  return {asin, on: !!(asin && buyList && buyList.has(asin))};
+}
+const isOfflineErr = m => !navigator.onLine || /Failed to fetch|Load failed|NetworkError|network connection|Couldn't reach|didn't answer/i.test(m || "");
+let offlineHit = null;         // {code, asin, on}
+function offlineResult(q){
+  const r = blCheck(q);
+  offlineHit = {code:q, asin:r.asin, on:r.on};
+  S.history.unshift({t:Date.now(), asin:r.asin || q, title:"ISBN " + q + " (scanned offline)", img:"", buy:r.on, profit:null, cost:Number(S.defCost)||0, why:r.on ? "On buy list" : "Not on buy list", offline:true, code:q});
+  S.history = S.history.slice(0, 5000);
+  if (r.on){ S.pending = (S.pending || []).filter(x => x !== q).concat(q); }
+  save();
+  announce({buy:r.on, profit:null});
+  if (navigator.vibrate) navigator.vibrate(r.on ? [60,40,60] : 120);
+  return r;
+}
+function offlineHTML(){
+  const h = offlineHit, n = buyList ? buyList.size : 0;
+  const cls = h.on ? "buy" : "skip";
+  return `<div class="verdict ${cls}" style="grid-template-columns:1fr">
+    <div><span class="vword">${h.on ? "ON BUY LIST" : "SKIP"}</span>
+    <span class="why">${h.on ? "Matches your Keepa rules · I'll check it with live data when you're back online" : n ? "Not on your buy list" : "No buy list yet: Settings → Offline buy list"}</span></div></div>
+    <div class="note" style="margin-top:8px">No signal · ISBN ${esc(h.code)}${h.asin ? " · ASIN " + esc(h.asin) : ""} · ${n.toLocaleString()} books on the list${S.blDate ? ", updated " + new Date(S.blDate).toLocaleDateString() : ""}</div>`;
+}
+// back online: recheck offline finds with live data, one at a time
+let recheckRunning = false;
+async function recheckPending(){
+  if (recheckRunning || !navigator.onLine || !S.key || !(S.pending || []).length) return;
+  recheckRunning = true;
+  while ((S.pending || []).length && navigator.onLine){
+    const q = S.pending[0];
+    const r = await lookup(q);
+    if (r && r.ok){
+      S.pending.shift();
+      S.history = S.history.filter(h => !(h.offline && h.code === q));   // replaced by the live result
+      save();
+    } else break;
+    await new Promise(ok => setTimeout(ok, 2500));
+  }
+  recheckRunning = false;
+  if (tab === "scan") renderScan();
+}
+window.addEventListener("online", () => setTimeout(recheckPending, 1500));
+// download from Keepa: count each sales-rank range first, split ranges over 10,000, then fetch the ASINs
+async function keepaQuery(sel, onWait){
+  for (;;){
+    const r = await fetch("https://api.keepa.com/query?" + new URLSearchParams({key:S.key, domain:"1", selection:JSON.stringify(sel)}), {cache:"no-store"});
+    let j = null; try { j = await r.json(); } catch(e){}
+    if (j && j.tokensLeft != null){ S.tokens = j.tokensLeft; }
+    if (r.status === 429 || (j && j.error && /token/i.test(j.error.type || j.error.message || ""))){
+      const wait = Math.max(5000, (j && j.refillIn) || 60000);
+      await onWait(wait); continue;
+    }
+    if (!r.ok || !j) throw new Error("Keepa Product Finder failed (HTTP " + r.status + ")" + (j && j.error ? ": " + (j.error.message || j.error.type) : ""));
+    if (j.error) throw new Error(j.error.message || j.error.type);
+    return j;
+  }
+}
+async function downloadBuyList(text){
+  let base;
+  try { base = JSON.parse(text); } catch(e){ throw new Error("That isn't valid JSON. Copy it from Keepa's Product Finder (API query) box."); }
+  delete base.page; delete base.perPage;
+  const lo0 = base.current_SALES_gte || 1, hi0 = base.current_SALES_lte || 10000000;
+  let prog = await idb.get("blProgress").catch(() => null);
+  if (!prog || prog.query !== text) prog = {query:text, queue:[[lo0, hi0]], asins:[]};
+  const asins = new Set(prog.asins);
+  const status = m => { blJob = {status:m}; const el = $("#blStatus"); if (el) el.textContent = m; };
+  const onWait = async ms => { for (let left = ms; left > 0; left -= 1000){ status(`Waiting for Keepa tokens… ${Math.ceil(left/1000)}s · ${asins.size.toLocaleString()} books so far · keep the app open`); await new Promise(r => setTimeout(r, 1000)); } };
+  while (prog.queue.length){
+    const [lo, hi] = prog.queue[0];
+    status(`Counting rank ${kfmt(lo)}–${kfmt(hi)} · ${asins.size.toLocaleString()} books so far`);
+    const probe = await keepaQuery({...base, current_SALES_gte:lo, current_SALES_lte:hi, page:0, perPage:50}, onWait);
+    const total = probe.totalResults || 0;
+    if (total > 10000 && hi > lo){
+      const mid = Math.floor((lo + hi) / 2);
+      prog.queue.splice(0, 1, [lo, mid], [mid + 1, hi]);
+    } else {
+      if (total > 50){
+        status(`Downloading ${total.toLocaleString()} books (rank ${kfmt(lo)}–${kfmt(hi)}) · ${asins.size.toLocaleString()} so far`);
+        const full = await keepaQuery({...base, current_SALES_gte:lo, current_SALES_lte:hi, page:0, perPage:10000}, onWait);
+        (full.asinList || []).forEach(a => asins.add(a));
+      } else (probe.asinList || []).forEach(a => asins.add(a));
+      prog.queue.shift();
+    }
+    prog.asins = [...asins];
+    await idb.set("blProgress", prog).catch(() => {});   // resume here if the app closes
+  }
+  await idb.set("buyList", [...asins]);
+  await idb.set("blProgress", null).catch(() => {});
+  buyList = asins; S.blDate = Date.now(); S.blCount = asins.size; save();
+  blJob = null;
+  return asins.size;
 }
 /* ============ live offers ============ */
 const COND = {1:"New",2:"Like New",3:"Very Good",4:"Good",5:"Acceptable",6:"Refurb",7:"Collectible LN",8:"Collectible VG",9:"Collectible G",10:"Collectible A",11:"Collectible"};
@@ -902,12 +1034,16 @@ function renderScanInner(err){
     <button class="tokens num statpill" id="statBtn" aria-label="Stats"><svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 20V10M9 20V4M14 20v-7M19 20v-4M3 20h18" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round"/></svg>${kfmt(statScans())}</button>
   </div>`;
   let body;
-  if (visual && !busy) body = visualHTML();
+  if (offlineHit && !busy) body = offlineHTML();
+  else if (visual && !busy) body = visualHTML();
   else if (busy) body = `<div class="empty"><b>Looking up…</b>Pulling Keepa data <span id="lookSec"></span><br><button class="mini" id="cancelLookup" style="margin-top:10px">Cancel</button></div>`;
   else if (!current) body = `<div class="empty"><b>Ready to scan</b>${S.key ? "Tap the camera or type a code. Bluetooth scanners work in the box too." : "Add your Keepa API key in Settings to start."}</div>`;
   else body = resultHTML();
   if (visual && !busy) {} // body already set
-  $("#main").innerHTML = head + body + (err ? `<div class="err">${esc(err)}</div>` : "") + scanBar();
+  const pend = (S.pending || []).length;
+  const banner = pend && !busy ? `<div class="card row" style="margin:10px 0 0;border-color:var(--buy)"><span class="grow"><b>${pend}</b> offline find${pend === 1 ? "" : "s"} to check with live data</span><button class="mini" id="recheck">${recheckRunning ? "Checking…" : "Check now"}</button></div>` : "";
+  $("#main").innerHTML = head + body + (err ? `<div class="err">${esc(err)}</div>` : "") + banner + scanBar();
+  const rc = $("#recheck"); if (rc) rc.onclick = () => { if (!navigator.onLine) return toast("Still no signal"); recheckPending(); };
   wireScan();
 }
 // Buyback sites: they don't share prices with other apps, so tapping copies the ISBN and opens the site to paste it.
@@ -1656,6 +1792,8 @@ async function contLookup(code){
   showCamRes("wait", `<span class="w">…</span><span class="t">Looking up ${esc(code)}</span><span class="p"></span><span class="s">Keep scanning when this changes</span>`);
   const r = await lookup(code);
   if (r && r.stale) return;
+  if (r && r.offline){ const o = r.offline;
+    showCamRes(o.on ? "buy" : "skip", `<span class="w">${o.on ? "LIST" : "SKIP"}</span><span class="t">ISBN ${esc(code)}</span><span class="p"></span><span class="s">No signal · ${o.on ? "on your buy list, will recheck online" : "not on your buy list"}</span>`); return; }
   if (!r || !r.ok || !current){ if (S.sound !== "off") beep("error"); showCamRes("skip", `<span class="w">!</span><span class="t">${esc(code)}</span><span class="p"></span><span class="s">${esc((r && r.error) || "Lookup failed")}</span>`); return; }
   const c = current.calc, p = current.product;
 
@@ -1809,7 +1947,7 @@ function renderHistory(){
     (h.length ? h.map((x,i)=>`<div class="card"><div class="row">
       ${x.img?`<img src="${x.img}" alt="" style="width:40px;height:52px;object-fit:contain;background:#fff;border-radius:5px">`:""}
       <div class="grow"><div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(x.title)}</div>
-      <div class="note num">${x.asin} · rank ${kfmt(x.rank)} · pulse ${x.pulse} · ${new Date(x.t).toLocaleDateString()}</div></div>
+      <div class="note num">${x.offline ? "Offline · " + esc(x.why) : `${x.asin} · rank ${kfmt(x.rank)} · pulse ${x.pulse}`} · ${new Date(x.t).toLocaleDateString()}</div></div>
       <div style="text-align:right"><span class="tag ${x.buy?"buy":"skip"}">${x.buy?"BUY":"SKIP"}</span><div class="num" style="margin-top:4px">${money(x.profit)}</div></div>
     </div><button class="mini" data-re="${i}" style="margin-top:8px">Rescan</button></div>`).join("")
     : `<div class="empty"><b>Nothing yet</b>Every lookup lands here.</div>`);
@@ -1844,6 +1982,7 @@ const SET_SECTIONS = [
   {key:"triggers", title:"FBA triggers",        sub:() => `${S.triggers.filter(t => t.on).length} on${S.mode === "triggers" ? " · active" : ""}`},
   {key:"roi",      title:"ROI rule",            sub:() => `$${S.roi.minProfit} · ${S.roi.minRoi}% ROI${S.mode === "roi" ? " · active" : ""}`},
   {key:"ev",       title:"How often it sells",  sub:() => S.mode === "ev" ? "Active" : "EV mode table"},
+  {key:"offline",  title:"Offline buy list",    sub:() => S.blCount ? `${S.blCount.toLocaleString()} books · ${new Date(S.blDate).toLocaleDateString()}` : "Not set up"},
   {key:"app",      title:"App",                 sub:() => "Version " + APP_VERSION}
 ];
 function showSettingsSection(){
@@ -1922,6 +2061,17 @@ function renderSettings(){
     <td style="width:74px"><input inputmode="numeric" data-ev="pct" data-i="${i}" value="${r.pct}"></td>
     <td style="width:84px"><input inputmode="decimal" data-ev="keep" data-i="${i}" value="${r.keep??""}" placeholder="Pass"></td></tr>`).join("")}
   </table></div></section>
+<section data-sec="offline" hidden><div class="sec-head"><button class="mini" data-back>‹ Settings</button><h2>Offline buy list</h2></div>
+  <div class="card">
+    <div class="note">With no signal, a scanned book on this list shows <b>ON BUY LIST</b>; anything else shows SKIP. Your finds get rechecked with live data when you're back online.</div>
+    <div class="field" style="margin-top:10px">Keepa Product Finder query (JSON)
+      <textarea id="blQ" rows="9" spellcheck="false" style="font:12px var(--mono);width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px">${esc(S.blQuery || BL_DEFAULT_QUERY)}</textarea></div>
+    <div class="note" style="margin-top:4px">On keepa.com: Product Finder → set your filters → "API query" → copy the JSON and paste it here. Ranges over 10,000 books are split automatically.</div>
+    <div class="row" style="margin-top:10px;flex-wrap:wrap"><button class="btn pri" id="blGo" style="flex:1">${S.blCount ? "Update list" : "Download list"}</button></div>
+    <div class="note" id="blStatus" style="margin-top:8px">${blJob ? esc(blJob.status) : S.blCount ? `${S.blCount.toLocaleString()} books, updated ${new Date(S.blDate).toLocaleString()}` : "No list yet."}</div>
+    <div class="note" style="margin-top:6px">Cost: about 10 tokens per part plus 1 per 100 books, so 30,000 books ≈ 330 tokens. At 5 tokens a minute that's about an hour; it waits for tokens on its own and picks up where it left off if the app closes.</div>
+    <div class="row" style="margin-top:8px"><span class="grow note">${(S.pending || []).length} offline finds waiting to recheck</span></div>
+  </div></section>
 <section data-sec="app" hidden><div class="sec-head"><button class="mini" data-back>‹ Settings</button><h2>App</h2></div>
   <div class="card">
     <div class="field">App link<div class="row"><input id="appLink" readonly value="https://lisyalis.github.io/scout-app/"><button class="mini" id="copyLink">Copy</button></div></div>
@@ -1940,6 +2090,16 @@ function renderSettings(){
   $("#ao").onchange = e => { S.autoOffers = e.target.checked; save(); };
   $("#amzOn").onchange = e => { S.amzOn = e.target.checked; save(); };
   $("#skipGated").onchange = e => { S.skipGated = e.target.checked; save(); };
+  $("#blQ").onchange = e => { S.blQuery = e.target.value; save(); };
+  $("#blGo").onclick = async e => {
+    if (blJob) return;
+    if (!S.key) return toast("Add your Keepa key first");
+    const b = e.target; b.disabled = true; b.textContent = "Working…";
+    S.blQuery = $("#blQ").value; save();
+    try { const n = await downloadBuyList(S.blQuery); toast(`Buy list ready: ${n.toLocaleString()} books`); }
+    catch(err){ blJob = null; const el = $("#blStatus"); if (el) el.textContent = err.message; }
+    if (tab === "settings" && settingsSec === "offline") renderSettings();
+  };
   $("#skipAmazon").onchange = e => { S.skipAmazon = e.target.checked; save(); };
   $("#rankBy").onchange = e => { S.rankBy = e.target.value; save(); };
   $("#amzWorker").onchange = e => { S.amzWorker = e.target.value.trim(); save(); };
@@ -1976,6 +2136,7 @@ function renderSettings(){
 
 // drop expired offer caches so storage doesn't grow
 try { for (let i = localStorage.length-1; i >= 0; i--){ const k = localStorage.key(i); if (k && k.startsWith("scout.offers.")){ const v = JSON.parse(localStorage.getItem(k)); if (!v || Date.now()-v.t > OFFER_TTL) localStorage.removeItem(k); } } } catch(e){}
+loadBuyList().then(() => { if (navigator.onLine) setTimeout(recheckPending, 3000); });
 setTab("scan");
 // Bluetooth/USB barcode scanners "type" the number fast and press Enter. Catch that anywhere in the app,
 // including with the camera open, so the scanner works in every mode.
