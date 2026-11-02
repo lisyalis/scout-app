@@ -184,6 +184,15 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 #cam.text .reticle{background:none;border:3px solid #facc15}
 #cam.text .reticle::after{display:none}
 #torchBtn[hidden]{display:none}
+.camstack{position:absolute;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));top:calc(12px + env(safe-area-inset-top,0px));display:flex;flex-direction:column;gap:6px;z-index:2}
+.camres-row{border-radius:14px;padding:10px 14px;display:grid;grid-template-columns:auto 1fr auto;gap:2px 12px;align-items:center;text-align:left;color:#111;background:#9aa3ad;box-shadow:0 6px 24px rgba(0,0,0,.4);cursor:pointer}
+.camres-row.buy{background:var(--buy);color:#05230f}.camres-row.skip{background:var(--skip);color:#2a0705}.camres-row.wait{background:var(--panel2);color:var(--fg)}
+.camres-row .w{font:700 30px/1 var(--display);grid-row:span 2}
+.camres-row .p{font:700 24px/1 var(--display);text-align:right;grid-row:span 2}
+.camres-row .t{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.camres-row .s{font-size:12px;font-weight:600;opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.camres-row.small{padding:6px 12px;opacity:.88}
+.camres-row.small .w{font-size:20px}.camres-row.small .p{font-size:17px}.camres-row.small .s{display:none}
 .camres{position:absolute;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));top:calc(12px + env(safe-area-inset-top,0px));border-radius:14px;padding:12px 14px;display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px;align-items:center;text-align:left;color:#111;background:#9aa3ad;box-shadow:0 6px 24px rgba(0,0,0,.4)}
 .camres.buy{background:var(--buy);color:#05230f}.camres.skip{background:var(--skip);color:#2a0705}.camres.wait{background:var(--panel2);color:var(--fg)}
 .camres .w{font:700 34px/1 var(--display);grid-row:span 2}
@@ -256,7 +265,7 @@ table.ev small{color:var(--muted);display:block}
   <video id="video" autoplay playsinline muted></video>
   <div class="reticle"></div>
   <div class="guide-label" id="guideLabel">Fit the barcode inside the box</div>
-  <button class="camres" id="camRes" hidden></button>
+  <div class="camstack" id="camRes" hidden></div>
   <div class="cam-bar"><span id="camHint"></span>
     <button class="btn" id="modeBtn" data-mode="barcode">Barcode</button>
     <button class="btn" id="zoomBtn" hidden>2x</button>
@@ -281,7 +290,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-11-01a";
+const APP_VERSION = "2026-11-02a";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -314,7 +323,7 @@ const S = {
   inbound:  LS.get("inbound", 0.40),       // $/lb to ship into FBA
   prep:     LS.get("prep", 0.00),          // per-unit prep cost
   defCost:  LS.get("defCost", 0.00),
-  buybox:   LS.get("buybox", true),        // costs +2 Keepa tokens
+  buybox:   LS.get("buybox", false),       // costs +2 Keepa tokens; Amazon live offers give the buy box free
   autoOffers: LS.get("autoOffers", false),
   cont:     LS.get("cont", false),         // continuous scan
   camMode:  LS.get("camMode", "barcode"),
@@ -404,19 +413,16 @@ async function lookup(raw){
     current = {product:prods[0], matches:prods.slice(1), cost:S.defCost, code:q};
     current.calc = calc(current.product, current.cost);
     if (useAmazon()){
-      // check restrictions before announcing (max 2.5s) so BUY/SKIP and the sound are right
-      const mine = current, gp = Promise.all([loadGate(mine), mine.calc.sell ? queueFee(mine, mine.calc.sell) : null]);
-      busy = false; renderScan();
-      await Promise.race([gp, new Promise(r => setTimeout(r, 2500))]);
-      if (ctl !== lookupCtl) return {ok:false, stale:true};
-      gp.then(() => { if (current === mine){ mine.calc = calc(mine.product, mine.cost); renderScan(); } });
-      current.calc = calc(current.product, current.cost);
+      // answer right away; the restriction check and exact fee correct it (and re-announce) if they change the answer
+      const mine = current;
+      mine.gate = "wait";
+      Promise.all([loadGate(mine), mine.calc.sell ? queueFee(mine, mine.calc.sell) : null]).then(() => refreshEntry(mine));
     }
     S.history.unshift(histEntry(current)); current.histT = S.history[0].t;
     S.history = S.history.slice(0,5000);
     save();
     if (navigator.vibrate) navigator.vibrate(current.calc.buy ? [60,40,60] : 120);
-    announce(current.calc);
+    announce(current.calc); current.announced = current.calc.buy;
     offTab = null;
     busy = false; renderScan();
     if (useAmazon() || S.autoOffers || cachedOffers(current.product.asin)) loadOffers(false);
@@ -650,7 +656,7 @@ async function loadOffers(force, viaKeepa){
       LS.set("offers."+asin, {t:mine.offersAt, list:mine.offers});
     }catch(e){ mine.offersErr = e.message; mine.offersErrAmz = true; }
     mine.offersLoading = false; save();
-    if (current === mine){ current.calc = calc(current.product, current.cost); renderScan(); }
+    refreshEntry(mine);
     return;
   }
   const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 20000);
@@ -670,7 +676,7 @@ async function loadOffers(force, viaKeepa){
     mine.offersErr = ctl.signal.aborted ? "Keepa didn't answer within 20 seconds." : e.message;
   }finally{
     clearTimeout(tm); mine.offersLoading = false; save();
-    if (current === mine){ current.calc = calc(current.product, current.cost); renderScan(); }
+    refreshEntry(mine);
   }
 }
 const SHORT = {1:"N",2:"LN",3:"VG",4:"G",5:"A"};
@@ -796,6 +802,11 @@ function calc(p, cost){
   const anyFBA = offs ? offs.some(x => x.fba && (S.cond === "used" ? x.used : x.isNew)) : (S.cond === "new" && pr.newFBA != null);
   const avg = S.cond === "used" ? pr.histUsed : pr.histNew;
   if (noBB && !anyFBA && sell != null && avg != null && sell > avg){ sell = avg; sellSrc = "capped at 6-mo avg"; }
+  // buy box from Amazon's live offers (free) when Keepa's buy box option is off
+  if (offs){
+    if (pr.usedBB == null){ const b = offs.find(x => x.bb && x.used); if (b) pr.usedBB = b.total; }
+    if (pr.newBB == null){ const b = offs.find(x => x.bb && x.isNew); if (b) pr.newBB = b.total; }
+  }
   // buyers won't pay more for used than for a new Prime copy
   if (S.cond === "used" && sell != null && newFBA != null && newFBA < sell){ sell = newFBA; sellSrc = "capped at new FBA"; }
   // an offer you tapped becomes the sell price
@@ -1083,7 +1094,7 @@ function queueFee(cur, price){
         break;
       }catch(e){ cur.amzFees[k] = "fail"; if (!e.retry) break; await new Promise(r => setTimeout(r, 1100)); }
     }
-    if (current === cur){ cur.calc = calc(cur.product, cur.cost); renderScan(); }
+    refreshEntry(cur);
   })();
   cur.amzFees[k] = job;
   return job;
@@ -1573,7 +1584,8 @@ function handleCode(code, session){
   if (!S.cont){ closeCam(); if (navigator.vibrate) navigator.vibrate(40); lookup(code); return Promise.resolve(false); }
   if (code === lastCode && Date.now() - lastAt < 5000) return Promise.resolve(true);   // ignore the same book for 5s
   lastCode = code; lastAt = Date.now();
-  return contLookup(code).then(() => true);
+  enqueueScan(code);                                  // don't wait: keep reading the next book
+  return Promise.resolve(true);
 }
 // Same method as ISBN Scout's live reader: normal text reading (no numbers-only mode), the guide strip
 // enlarged to at least 1400px, a simple contrast boost, and an ISBN only counts once it's read twice.
@@ -1657,7 +1669,7 @@ async function openCam(mode){
   }
   clearTimeout(camTimer); camTimer = null;
 
-  setContBtn(); $("#camRes").hidden = true; lastCode = null;
+  setContBtn(); camStack.length = 0; stackRender(); lastCode = null;
   $("#cam").hidden = false;
   setModeBtn();
   // keep the camera stream between scans: faster, no re-prompt, avoids the iOS second-open freeze
@@ -1787,6 +1799,61 @@ function announce(c){
   }
   beep(c.buy ? "buy" : "skip");
 }
+// Recompute a scan when late data arrives (restriction, exact fee, live offers), even if you've moved on to the next book.
+// If the answer flips, its card and saved scan update and the new answer is announced.
+function refreshEntry(cur){
+  if (!cur || !cur.product) return;
+  const prev = current; current = cur;
+  try { cur.calc = calc(cur.product, cur.cost); } finally { current = prev; }
+  const h = cur.histT && S.history.find(x => x.t === cur.histT);
+  if (h){ const c = cur.calc; Object.assign(h, {buy:c.buy, profit:c.profit, why:c.why, gated:cur.gate === "bad", look:c.buy && c.trigColor === "yellow"}); LS.set("history", S.history); }
+  if (cur.announced != null && cur.announced !== cur.calc.buy){
+    cur.announced = cur.calc.buy; announce(cur.calc);
+    if (navigator.vibrate) navigator.vibrate(cur.calc.buy ? [60,40,60] : 120);
+  }
+  stackRender();
+  if (current === cur && tab === "scan") renderScan();
+}
+// ---------- scan queue: read the next book while earlier ones are still looking up ----------
+const scanQueue = []; let queueBusy = false; const camStack = [];
+function enqueueScan(code){
+  const item = {code, state:"queued", t:Date.now()};
+  camStack.unshift(item); camStack.splice(5);
+  scanQueue.push(item); stackRender(); runQueue();
+}
+async function runQueue(){
+  if (queueBusy) return; queueBusy = true;
+  while (scanQueue.length){
+    const item = scanQueue.shift(); item.state = "wait"; stackRender();
+    const r = await lookup(item.code);
+    if (r && r.offline){ item.state = r.offline.on ? "list" : "skip"; item.offline = r.offline; }
+    else if (r && r.ok && current){ item.cur = current; item.state = "done"; }
+    else { item.state = "err"; item.err = (r && r.error) || "Lookup failed"; if (S.sound !== "off") beep("error"); }
+    stackRender();
+  }
+  queueBusy = false;
+}
+function stackRender(){
+  const box = $("#camRes"); if (!box) return;
+  if (!camStack.length){ box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = camStack.map((it, i) => {
+    let cls = "wait", w = "…", t = "Looking up " + esc(it.code), pr = "", sub = it.state === "queued" ? "In line" : "Checking Keepa";
+    if (it.state === "done"){
+      const c = it.cur.calc, buy = c.buy; cls = buy ? "buy" : "skip"; w = buy ? "BUY" : "SKIP"; t = esc(it.cur.product.title); pr = money(c.profit);
+      sub = `${it.cur.gate === "wait" ? "checking Amazon… · " : it.cur.gate === "bad" ? "⚠ RESTRICTED · " : ""}${c.amzSelling ? "AMAZON SELLING · " : ""}${esc(c.why)} · rank ${kfmt(c.pr.rank)}`;
+    } else if (it.state === "list" || (it.state === "skip" && it.offline)){
+      cls = it.state === "list" ? "buy" : "skip"; w = it.state === "list" ? "LIST" : "SKIP"; t = "ISBN " + esc(it.code); sub = "No signal · " + (it.state === "list" ? "on your buy list" : "not on your buy list");
+    } else if (it.state === "err"){ cls = "skip"; w = "!"; t = esc(it.code); sub = esc(it.err); }
+    return `<div class="camres-row ${cls}${i ? " small" : ""}" data-stack="${i}"><span class="w">${w}</span><span class="t">${t}</span><span class="p num">${pr}</span><span class="s">${sub}</span></div>`;
+  }).join("");
+  box.querySelectorAll("[data-stack]").forEach(el => el.onclick = e => {
+    e.stopPropagation();
+    const it = camStack[+el.dataset.stack];
+    if (it && it.cur){ current = it.cur; offlineHit = null; }
+    closeCam(); setTab("scan");
+  });
+}
 function showCamRes(cls, html){ const b = $("#camRes"); b.className = "camres " + cls; b.innerHTML = html; b.hidden = false; }
 async function contLookup(code){
   showCamRes("wait", `<span class="w">…</span><span class="t">Looking up ${esc(code)}</span><span class="p"></span><span class="s">Keep scanning when this changes</span>`);
@@ -1803,7 +1870,7 @@ async function contLookup(code){
 }
 function setContBtn(){ const b = $("#contBtn"); b.setAttribute("aria-pressed", String(S.cont)); b.textContent = "Continuous: " + (S.cont ? "On" : "Off"); }
 $("#contBtn").onclick = () => { S.cont = !S.cont; save(); setContBtn(); };
-$("#camRes").onclick = () => { closeCam(); };   // result is already on the main screen behind
+$("#camRes").onclick = () => { closeCam(); };
 function closeCam(){
   camSession++;
   if (torchOn){ torchOn = false; try { stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:false}]}); } catch(e){} }
@@ -2137,6 +2204,8 @@ function renderSettings(){
 // drop expired offer caches so storage doesn't grow
 try { for (let i = localStorage.length-1; i >= 0; i--){ const k = localStorage.key(i); if (k && k.startsWith("scout.offers.")){ const v = JSON.parse(localStorage.getItem(k)); if (!v || Date.now()-v.t > OFFER_TTL) localStorage.removeItem(k); } } } catch(e){}
 loadBuyList().then(() => { if (navigator.onLine) setTimeout(recheckPending, 3000); });
+// one time: switch Keepa's buy box option off when Amazon live offers are set up (saves 2 tokens a scan)
+if (!LS.get("bbOffDone", false)){ if (useAmazon() && S.buybox){ S.buybox = false; save(); } LS.set("bbOffDone", true); }
 setTab("scan");
 // Bluetooth/USB barcode scanners "type" the number fast and press Enter. Catch that anywhere in the app,
 // including with the camera open, so the scanner works in every mode.
@@ -2144,7 +2213,7 @@ let kbBuf = "", kbLast = 0, kbTimer = null;
 function scannerCode(code){
   kbBuf = ""; clearTimeout(kbTimer);
   if (!$("#cam").hidden) handleCode(code, camSession);       // camera open: same as a camera scan (continuous mode keeps going)
-  else { if (tab !== "scan") setTab("scan"); routeInput(code); }
+  else { if (tab !== "scan") setTab("scan"); if (isCode(code)) enqueueScan(code); else routeInput(code); }   // rapid scans line up instead of cancelling each other
 }
 document.addEventListener("keydown", e => {
   const t = e.target, typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
