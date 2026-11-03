@@ -120,6 +120,15 @@ main:has(.scandock){padding-bottom:0}
 .scandock{position:sticky;bottom:0;z-index:6;background:var(--bg);margin:10px calc(-1 * max(14px,env(safe-area-inset-right,0px))) 0 calc(-1 * max(14px,env(safe-area-inset-left,0px)));
   padding:8px max(14px,env(safe-area-inset-right,0px)) 10px max(14px,env(safe-area-inset-left,0px));border-top:1px solid var(--line)}
 .scandock .scanbar{margin-top:0}
+.pinprod{display:flex;gap:10px;align-items:center;margin-bottom:8px}
+.pinprod img,.pinprod .noimg{width:46px;height:62px;object-fit:contain;background:#fff;border-radius:6px;flex:none}
+.pinfo{flex:1;min-width:0}
+.pinfo .t{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pinfo .meta{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pinm{flex-direction:row;overflow-x:auto;gap:6px;margin-top:4px}
+.pinm button{font-size:11px;padding:3px 9px;max-width:150px;flex:none}
+.pinadd{flex:none;padding:12px 14px;font-size:14px;max-width:44%}
+.pinadd:disabled{background:var(--panel2);color:var(--buy);border-color:var(--line)}
 .target{font-size:12px;font-weight:600;opacity:.85;font-family:var(--mono)}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
 .tiles>div{padding:9px 6px;text-align:center;min-width:0}
@@ -312,7 +321,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-11-02g";
+const APP_VERSION = "2026-11-02h";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -935,10 +944,10 @@ function setTab(t){
 }
 document.getElementById("tabs").addEventListener("click", e => { const b=e.target.closest("button"); if(b) setTab(b.dataset.tab); });
 
-function scanBar(){
+function scanBar(pinned){
   return `<div class="note" style="margin-top:12px">Most accurate for ISBN text: open the iPhone <b>Camera</b>, point at the ISBN, tap the <b>text icon</b>, tap the number, <b>Copy</b>. Come back and tap <b>PASTE</b>.</div>
   <label class="note" style="display:block;margin-top:6px">Or use a photo (barcode or ISBN page): <input type="file" accept="image/*" capture="environment" id="photoIn" style="width:auto;border:0;padding:0;font-size:13px"></label>
-  <div class="scandock"><form class="scanbar" id="scanForm" autocomplete="off">
+  <div class="scandock">${pinned || ""}<form class="scanbar" id="scanForm" autocomplete="off">
     <input id="q" inputmode="text" placeholder="ISBN, UPC, ASIN or a title" enterkeyhint="search" aria-label="ISBN, UPC, ASIN or title">
     <button class="round vis" type="button" id="pasteBtn" aria-label="Paste ISBN" style="width:auto;padding:0 12px;border-radius:22px;font-weight:700;font-size:13px">PASTE</button>
     <button class="round vis" type="button" id="visBtn" aria-label="Read the ISBN with the camera"><svg viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4z"/><path d="M20 5h-6a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h6z"/></svg></button>
@@ -1075,7 +1084,7 @@ function renderScanInner(err){
   if (visual && !busy) {} // body already set
   const pend = (S.pending || []).length;
   const banner = pend && !busy ? `<div class="card row" style="margin:10px 0 0;border-color:var(--buy)"><span class="grow"><b>${pend}</b> offline find${pend === 1 ? "" : "s"} to check with live data</span><button class="mini" id="recheck">${recheckRunning ? "Checking…" : "Check now"}</button></div>` : "";
-  $("#main").innerHTML = head + body + (err ? `<div class="err">${esc(err)}</div>` : "") + banner + scanBar();
+  $("#main").innerHTML = head + body + (err ? `<div class="err">${esc(err)}</div>` : "") + banner + scanBar(current && !busy && !offlineHit && !visual ? pinnedHTML() : "");
   wireStrip();
   const rc = $("#recheck"); if (rc) rc.onclick = () => { if (!navigator.onLine) return toast("Still no signal"); recheckPending(); };
   wireScan();
@@ -1174,18 +1183,20 @@ function resultHTML(){
     <a class="chip" target="_blank" rel="noopener" href="https://keepa.com/#!product/1-${p.asin}">Keepa</a>
     ${c.isBook ? `<a class="chip" target="_blank" rel="noopener" href="https://bookscouter.com/book/${current.code}">Buyback</a>` : ""}
   </div>
-  <div class="prod">
-    ${imgUrl(p) ? `<img src="${imgUrl(p)}" alt="">` : ""}
-    <div style="min-width:0">
+  <div class="actions" style="grid-template-columns:1fr"><button class="btn" id="clearRes">Next item</button></div>`;
+}
+// the book's cover, info and Add button, pinned above the scan bar
+function pinnedHTML(){
+  const p = current.product, inInv = S.inv.some(x => x.asin === p.asin && x.t > (current.histT || 0) - 1);
+  return `<div class="pinprod">
+    ${imgUrl(p) ? `<img src="${imgUrl(p)}" alt="">` : `<div class="noimg"></div>`}
+    <div class="pinfo">
       <div class="t">${esc(p.title)}</div>
-      <div class="meta">${esc(p.author || p.brand || "")}${p.binding ? " · "+esc(p.binding) : ""}</div>
-      <div class="asin num">${p.asin}</div>
-      ${current.matches.length ? `<div class="label" style="margin-top:8px">Other matches</div><div class="matches">${current.matches.map((m,i)=>`<button data-m="${i}">${esc(m.title)}</button>`).join("")}</div>` : ""}
+      <div class="meta">${esc(p.author || p.brand || "")}${p.binding ? " · " + esc(p.binding) : ""}</div>
+      <div class="meta">${current.gate === "bad" ? '<b style="color:var(--skip)">GATED</b> · ' : ""}<span class="asin num">${p.asin}</span></div>
+      ${current.matches.length ? `<div class="matches pinm">${current.matches.map((m, i) => `<button data-m="${i}">${esc(m.title)}</button>`).join("")}</div>` : ""}
     </div>
-  </div>
-  <div class="actions">
-    <button class="btn pri" id="addInv">Add to inventory</button>
-    <button class="btn" id="clearRes">Next item</button>
+    <button class="btn pri pinadd" id="addInv"${inInv ? " disabled" : ""}>${inInv ? "✓ Added" : "Add to inventory"}</button>
   </div>`;
 }
 function routeInput(v){
@@ -1247,7 +1258,7 @@ function wireScan(){
     const p=current.product, c=current.calc;
     const it = {t:Date.now(), asin:p.asin, title:p.title, img:imgUrl(p), cost:current.cost||0, sell:c.sell, profit:c.profit, cond:S.cond, status:"bought"};
     S.inv.unshift(it);
-    save(); toast("Added to inventory");
+    save(); toast("Added to inventory"); renderScan();
     sendToLister([it]);
   };
   document.querySelectorAll("[data-m]").forEach(b => b.onclick = () => pick(current.matches[+b.dataset.m]));
