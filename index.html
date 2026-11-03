@@ -195,9 +195,7 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
     linear-gradient(#4ade80,#4ade80) right top/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) right top/4px 26px no-repeat,
     linear-gradient(#4ade80,#4ade80) left bottom/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) left bottom/4px 26px no-repeat,
     linear-gradient(#4ade80,#4ade80) right bottom/26px 4px no-repeat, linear-gradient(#4ade80,#4ade80) right bottom/4px 26px no-repeat}
-.reticle::after{content:"";position:absolute;left:6%;right:6%;top:50%;height:2px;background:#ff3b30;box-shadow:0 0 12px 2px rgba(255,59,48,.7);animation:sweep 1.6s ease-in-out infinite alternate}
-@keyframes sweep{from{top:15%}to{top:85%}}
-@media (prefers-reduced-motion:reduce){.reticle::after{animation:none}}
+.reticle::after{content:"";position:absolute;left:6%;right:6%;top:calc(50% - 1px);height:2px;background:#ff3b30;box-shadow:0 0 12px 2px rgba(255,59,48,.7)}   /* steady line across the middle */
 #cam.text .reticle{background:none;border:3px solid #facc15}
 #cam.text .reticle::after{display:none}
 #torchBtn[hidden]{display:none}
@@ -307,7 +305,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-11-02e";
+const APP_VERSION = "2026-11-02f";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
