@@ -115,6 +115,11 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .qtile.on .qimg{box-shadow:0 0 0 2px var(--fg)}
 .qp{font:700 16px var(--display);margin-top:3px;padding-left:2px}
 .qx{position:absolute;top:5px;right:5px;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;font-size:12px;line-height:24px;padding:0}
+/* scan bar pinned to the bottom of the screen so it's always in reach while you scroll a result */
+main:has(.scandock){padding-bottom:0}
+.scandock{position:sticky;bottom:0;z-index:6;background:var(--bg);margin:10px calc(-1 * max(14px,env(safe-area-inset-right,0px))) 0 calc(-1 * max(14px,env(safe-area-inset-left,0px)));
+  padding:8px max(14px,env(safe-area-inset-right,0px)) 10px max(14px,env(safe-area-inset-left,0px));border-top:1px solid var(--line)}
+.scandock .scanbar{margin-top:0}
 .target{font-size:12px;font-weight:600;opacity:.85;font-family:var(--mono)}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
 .tiles>div{padding:9px 6px;text-align:center;min-width:0}
@@ -307,7 +312,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-11-02e";
+const APP_VERSION = "2026-11-02g";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -931,15 +936,15 @@ function setTab(t){
 document.getElementById("tabs").addEventListener("click", e => { const b=e.target.closest("button"); if(b) setTab(b.dataset.tab); });
 
 function scanBar(){
-  return `<form class="scanbar" id="scanForm" autocomplete="off">
+  return `<div class="note" style="margin-top:12px">Most accurate for ISBN text: open the iPhone <b>Camera</b>, point at the ISBN, tap the <b>text icon</b>, tap the number, <b>Copy</b>. Come back and tap <b>PASTE</b>.</div>
+  <label class="note" style="display:block;margin-top:6px">Or use a photo (barcode or ISBN page): <input type="file" accept="image/*" capture="environment" id="photoIn" style="width:auto;border:0;padding:0;font-size:13px"></label>
+  <div class="scandock"><form class="scanbar" id="scanForm" autocomplete="off">
     <input id="q" inputmode="text" placeholder="ISBN, UPC, ASIN or a title" enterkeyhint="search" aria-label="ISBN, UPC, ASIN or title">
     <button class="round vis" type="button" id="pasteBtn" aria-label="Paste ISBN" style="width:auto;padding:0 12px;border-radius:22px;font-weight:700;font-size:13px">PASTE</button>
     <button class="round vis" type="button" id="visBtn" aria-label="Read the ISBN with the camera"><svg viewBox="0 0 24 24"><path d="M4 5h6a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4z"/><path d="M20 5h-6a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h6z"/></svg></button>
     <input type="file" accept="image/*" capture="environment" id="visIn" hidden>
     <button class="round cam" type="button" id="camBtn" aria-label="Scan with camera"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
-  </form>
-  <div class="note" style="margin-top:6px">Most accurate for ISBN text: open the iPhone <b>Camera</b>, point at the ISBN, tap the <b>text icon</b>, tap the number, <b>Copy</b>. Come back and tap <b>PASTE</b>.</div>
-  <label class="note" style="display:block;margin-top:6px">Or use a photo (barcode or ISBN page): <input type="file" accept="image/*" capture="environment" id="photoIn" style="width:auto;border:0;padding:0;font-size:13px"></label>`;
+  </form></div>`;
 }
 function renderScan(err){
   if (tab !== "scan") return;
