@@ -98,6 +98,18 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .day .col{width:100%;background:var(--line);border-radius:3px 3px 1px 1px;display:flex;align-items:flex-end;overflow:hidden}
 .day .acc{width:100%;background:var(--buy)}
 .day.on{box-shadow:inset 0 -3px 0 var(--accent)}
+.qstrip{display:flex;gap:8px;overflow-x:auto;padding:2px 0 8px;margin-bottom:6px;scroll-snap-type:x proximity}
+.qtile{flex:none;width:92px;position:relative;cursor:pointer;scroll-snap-align:start}
+.qimg{height:112px;border-radius:10px 10px 0 0;overflow:hidden;background:var(--panel2);display:grid;place-items:center;border:3px solid var(--line);border-bottom:0}
+.qimg img{width:100%;height:100%;object-fit:cover;background:#fff}
+.qimg span{font-size:10px;color:var(--muted);padding:4px;word-break:break-all;text-align:center}
+.qlab{font:700 12px var(--display);letter-spacing:.03em;padding:3px 6px;border-radius:0 0 10px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:var(--line);color:var(--fg)}
+.qtile.buy .qimg{border-color:var(--buy)}.qtile.buy .qlab{background:var(--buy);color:#05230f}
+.qtile.skip .qimg{border-color:var(--skip)}.qtile.skip .qlab{background:var(--skip);color:#2a0705}
+.qtile.wait .qlab{background:var(--panel2);color:var(--accent)}
+.qtile.on .qimg{box-shadow:0 0 0 2px var(--fg)}
+.qp{font:700 16px var(--display);margin-top:3px;padding-left:2px}
+.qx{position:absolute;top:5px;right:5px;width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,.65);color:#fff;font-size:12px;line-height:24px;padding:0}
 .target{font-size:12px;font-weight:600;opacity:.85;font-family:var(--mono)}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px;background:var(--panel)}
 .tiles>div{padding:9px 6px;text-align:center;min-width:0}
@@ -290,7 +302,7 @@ window.addEventListener("unhandledrejection", e => {
   showFatal(msg);
 });
 
-const APP_VERSION = "2026-11-02a";
+const APP_VERSION = "2026-11-02b";
 /* ============ storage ============ */
 const LS = {
   get(k, d){ try{ const v = localStorage.getItem("scout."+k); return v==null ? d : JSON.parse(v);}catch(e){ return d; } },
@@ -1053,7 +1065,8 @@ function renderScanInner(err){
   if (visual && !busy) {} // body already set
   const pend = (S.pending || []).length;
   const banner = pend && !busy ? `<div class="card row" style="margin:10px 0 0;border-color:var(--buy)"><span class="grow"><b>${pend}</b> offline find${pend === 1 ? "" : "s"} to check with live data</span><button class="mini" id="recheck">${recheckRunning ? "Checking…" : "Check now"}</button></div>` : "";
-  $("#main").innerHTML = head + body + (err ? `<div class="err">${esc(err)}</div>` : "") + banner + scanBar();
+  $("#main").innerHTML = head + stripHTML() + body + (err ? `<div class="err">${esc(err)}</div>` : "") + banner + scanBar();
+  wireStrip();
   const rc = $("#recheck"); if (rc) rc.onclick = () => { if (!navigator.onLine) return toast("Still no signal"); recheckPending(); };
   wireScan();
 }
@@ -1669,7 +1682,7 @@ async function openCam(mode){
   }
   clearTimeout(camTimer); camTimer = null;
 
-  setContBtn(); camStack.length = 0; stackRender(); lastCode = null;
+  setContBtn(); stackRender(); lastCode = null;
   $("#cam").hidden = false;
   setModeBtn();
   // keep the camera stream between scans: faster, no re-prompt, avoids the iOS second-open freeze
@@ -1818,7 +1831,7 @@ function refreshEntry(cur){
 const scanQueue = []; let queueBusy = false; const camStack = [];
 function enqueueScan(code){
   const item = {code, state:"queued", t:Date.now()};
-  camStack.unshift(item); camStack.splice(5);
+  camStack.unshift(item); camStack.splice(40);
   scanQueue.push(item); stackRender(); runQueue();
 }
 async function runQueue(){
@@ -1833,11 +1846,58 @@ async function runQueue(){
   }
   queueBusy = false;
 }
+// ---------- session strip on the Scanner screen: every book scanned this session, in line ones included ----------
+function stripHTML(){
+  if (!camStack.length) return "";
+  const inLine = camStack.filter(it => it.state === "queued" || it.state === "wait").length;
+  return `<div class="row" style="margin:8px 0 4px"><span class="label grow">This session · ${camStack.length} book${camStack.length === 1 ? "" : "s"}${inLine ? ` · <span style="color:var(--accent)">${inLine} in line</span>` : ""}</span><button class="mini" id="qClear">Clear</button></div>
+  <div class="qstrip" id="qstrip">${camStack.map((it, i) => {
+    let cls = "wait", label = it.state === "queued" ? "In line" : "Looking up…", price = "", img = "";
+    if (it.state === "done" && it.cur){
+      const c = it.cur.calc; cls = c.buy ? "buy" : "skip"; img = imgUrl(it.cur.product);
+      label = (c.buy ? "✓ " : "✕ ") + (it.cur.gate === "bad" ? "Restricted" : c.buy ? (c.trigger || "BUY") : "SKIP");
+      price = money(c.profit);
+    } else if (it.offline){ cls = it.offline.on ? "buy" : "skip"; label = it.offline.on ? "✓ On list" : "✕ SKIP"; price = "offline"; }
+    else if (it.state === "err"){ cls = "skip"; label = "No match"; }
+    const active = it.cur && current === it.cur;
+    return `<div class="qtile ${cls}${active ? " on" : ""}" data-q="${i}" role="button" tabindex="0" aria-label="${esc(label)}">
+      <div class="qimg">${img ? `<img src="${img}" alt="">` : `<span class="num">${esc(it.code)}</span>`}</div>
+      <div class="qlab">${esc(label)}</div>
+      <button class="qx" data-qx="${i}" aria-label="Remove">✕</button>
+      <div class="qp num">${price}</div></div>`;
+  }).join("")}</div>`;
+}
+function wireStrip(){
+  const qc = $("#qClear"); if (qc) qc.onclick = () => { scanQueue.length = 0; camStack.length = 0; renderScan(); };
+  document.querySelectorAll("[data-qx]").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const it = camStack[+b.dataset.qx]; if (!it) return;
+    const qi = scanQueue.indexOf(it); if (qi >= 0) scanQueue.splice(qi, 1);   // not looked up yet: drop it from the line
+    camStack.splice(+b.dataset.qx, 1); renderScan();
+  });
+  document.querySelectorAll("[data-q]").forEach(el => el.onclick = () => {
+    const it = camStack[+el.dataset.q];
+    if (it && it.cur){ current = it.cur; offlineHit = null; renderScan(); $("#main").scrollTop = 0; }
+    else if (it && it.offline){ offlineHit = {code:it.code, asin:it.offline.asin, on:it.offline.on}; current = null; renderScan(); }
+  });
+}
+function stripRefresh(){
+  // update the strip in place while you're on the Scanner (Bluetooth scans in a row)
+  const el = $("#qstrip");
+  if (tab !== "scan") return;
+  if (!el){ if (camStack.length && $("#cam").hidden) renderScan(); return; }   // first book: draw the strip
+  const wrap = document.createElement("div"); wrap.innerHTML = stripHTML();
+  const head = el.previousElementSibling, newHead = wrap.firstElementChild, newStrip = wrap.lastElementChild;
+  if (head && newHead) head.replaceWith(newHead);
+  const sl = el.scrollLeft; el.replaceWith(newStrip); newStrip.scrollLeft = sl;
+  wireStrip();
+}
 function stackRender(){
+  stripRefresh();
   const box = $("#camRes"); if (!box) return;
   if (!camStack.length){ box.hidden = true; return; }
   box.hidden = false;
-  box.innerHTML = camStack.map((it, i) => {
+  box.innerHTML = camStack.slice(0, 5).map((it, i) => {
     let cls = "wait", w = "…", t = "Looking up " + esc(it.code), pr = "", sub = it.state === "queued" ? "In line" : "Checking Keepa";
     if (it.state === "done"){
       const c = it.cur.calc, buy = c.buy; cls = buy ? "buy" : "skip"; w = buy ? "BUY" : "SKIP"; t = esc(it.cur.product.title); pr = money(c.profit);
