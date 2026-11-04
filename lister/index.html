@@ -126,6 +126,9 @@ nav.tabs svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1
 .smenu button{display:grid;grid-template-columns:28px 1fr auto;align-items:center;gap:10px;padding:14px;background:var(--panel);text-align:left;font-size:15px}
 .smenu button b{font-weight:600}
 .sback{margin-bottom:4px}
+.day{margin-top:12px}
+.dayhead{display:flex;gap:10px;align-items:center;width:100%;padding:10px 12px;border-radius:10px;background:var(--panel2);border:1px solid var(--line)}
+.dayhead .chev{color:var(--accent);font-size:16px;width:14px}
 .kchart{width:100%;border-radius:10px;background:#fff;display:block;min-height:120px}
 .lblprev{background:#fff;color:#000;border-radius:6px;margin:10px auto 0;box-shadow:0 2px 10px rgba(0,0,0,.5);overflow:hidden}
 .lbl{box-sizing:border-box;background:#fff;color:#000;font-family:Arial,Helvetica,sans-serif;display:flex;flex-direction:column;justify-content:center;align-items:center;overflow:hidden}
@@ -1249,6 +1252,43 @@ function agedTag(x){
   return ` · <b style="color:${d >= 181 ? "var(--skip)" : "var(--warn)"}">${d >= 181 ? "AGED " + d + "d · storage surcharge" : "AGING " + d + "d"}</b>`;
 }
 let listedFilter = "all";
+// Listed is grouped by the day you listed: Today, Yesterday, then dates. Tap a day to fold it.
+let openDays = LS.get("openDays", null);   // null = default: newest two days open
+function dayLabel(d){
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const x = new Date(d); x.setHours(0, 0, 0, 0);
+  const diff = Math.round((t - x) / 864e5);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  return x.toLocaleDateString([], {weekday: "short", month: "short", day: "numeric", year: x.getFullYear() === t.getFullYear() ? undefined : "numeric"});
+}
+function groupsHTML(rows, rowHTML, openAll){
+  if (!rows.length) return `<div class="note" style="margin-top:12px">Nothing listed yet.</div>`;
+  const groups = [];
+  for (const x of rows.slice().sort((a, b) => b.at - a.at)){
+    const key = new Date(x.at).toDateString();
+    let g = groups[groups.length - 1];
+    if (!g || g.key !== key){ g = {key, at: x.at, rows: []}; groups.push(g); }
+    g.rows.push(x);
+  }
+  const isOpen = (g, i) => openAll || (openDays ? openDays.includes(g.key) : i < 2);
+  return groups.map((g, i) => {
+    const n = g.rows.reduce((a, x) => a + (x.qty || 1), 0);
+    const val = g.rows.reduce((a, x) => a + x.price * (x.qty || 1), 0), cost = g.rows.reduce((a, x) => a + (x.cost || 0) * (x.qty || 1), 0);
+    const ready = g.rows.filter(x => x.channel === "mf" || (x.status && x.status.fnsku)).length;
+    const fba = g.rows.filter(x => x.channel === "fba").length, mf = g.rows.length - fba;
+    const open = isOpen(g, i);
+    return `<div class="day">
+      <button class="dayhead" data-day="${esc(g.key)}" aria-expanded="${open}">
+        <span class="chev">${open ? "▾" : "▸"}</span>
+        <span style="flex:1;text-align:left"><b>${esc(dayLabel(g.at))}</b><span class="note"> · ${n} book${n === 1 ? "" : "s"}${fba && mf ? ` (${fba} FBA, ${mf} MF)` : ""}</span>
+          <span class="note" style="display:block">${money(val)} listed · cost ${money(cost)}</span></span>
+      </button>
+      ${open ? `<div class="row" style="margin:6px 0 0;gap:6px"><button class="mini" data-dayprint="${esc(g.key)}" ${ready ? "" : "disabled"}>Print labels & tickets (${ready} of ${g.rows.length} ready)</button></div>
+        <div class="list">${g.rows.map(rowHTML).join("")}</div>` : ""}
+    </div>`;
+  }).join("");
+}
 function renderListed(){
   const q = (LS.get("q", "") || "").toLowerCase();
   const all = live();
@@ -1266,8 +1306,7 @@ function renderListed(){
       <span class="msg">Lower the price, or remove them before Amazon's aged-inventory surcharge (about 6 months). Refresh Sales first so sold books drop off.</span></div>` : ""}
     <div class="note" style="margin-top:6px">${rows.length} items · ${money(total)} listed value</div>
     <div class="note row" style="margin-top:4px;justify-content:space-between"><span>${syncLine()}</span><button class="mini" id="syncNow">Sync now</button></div>
-    ${todays.length ? `<button class="btn" id="printToday" style="width:100%;margin-top:10px" ${todayReady ? "" : "disabled"}>Print today's labels & tickets (${todayReady} of ${todays.length} ready)</button>` : ""}
-    <div class="list">${rows.map(x => `
+    ${groupsHTML(rows, x => `
       <div class="item">
         <div class="t">${esc(x.title)}</div>
         <div class="m"><span class="tag ${x.channel === "fba" ? "fba" : "mf"}">${x.channel.toUpperCase()}</span>
@@ -1291,13 +1330,21 @@ function renderListed(){
           <a class="mini" style="text-decoration:none;color:var(--fg)" target="_blank" rel="noopener" href="${scLink(x)}">Seller Central</a>
           <button class="mini" data-del="${esc(x.sku)}" style="color:var(--skip)">Delete</button>
           ${x.status && "price" in x.status && x.status.price == null ? `<button class="mini" data-fix="${esc(x.sku)}" style="border-color:var(--accent);color:var(--accent)">Resend price & ${x.channel === "fba" ? "FBA" : "MF"}</button>` : ""}</div>`}
-      </div>`).join("") || `<div class="note" style="margin-top:12px">Nothing listed yet.</div>`}</div>`;
+      </div>`, !!q || listedFilter === "aged")}`;
   const find = sku => S.listed.find(x => x.sku === sku);
   $("#q").oninput = e => { LS.set("q", e.target.value); const p = e.target.selectionStart; renderListed(); const n = $("#q"); n.focus(); n.setSelectionRange(p, p); };
   $("#csv").onclick = exportCsv;
   if ($("#agedTog")) $("#agedTog").onclick = () => { listedFilter = listedFilter === "aged" ? "all" : "aged"; renderListed(); };
   $("#syncNow").onclick = e => { e.currentTarget.innerHTML = '<span class="spin"></span>'; sync(); };
   if ($("#printToday")) $("#printToday").onclick = () => printAll(todays);
+  document.querySelectorAll("[data-day]").forEach(b => b.onclick = () => {
+    const keys = [...document.querySelectorAll("[data-day]")].map(x => x.dataset.day);
+    if (!openDays) openDays = keys.filter(k => document.querySelector(`[data-day="${CSS.escape(k)}"]`).getAttribute("aria-expanded") === "true");
+    const k = b.dataset.day;
+    openDays = openDays.includes(k) ? openDays.filter(x => x !== k) : openDays.concat([k]);
+    LS.set("openDays", openDays.slice(-30)); renderListed();
+  });
+  document.querySelectorAll("[data-dayprint]").forEach(b => b.onclick = () => printAll(live().filter(x => new Date(x.at).toDateString() === b.dataset.dayprint)));
   document.querySelectorAll("[data-check]").forEach(b => b.onclick = async () => {
     const entry = find(b.dataset.check); if (!entry) return;
     b.disabled = true; b.innerHTML = '<span class="spin"></span>';
