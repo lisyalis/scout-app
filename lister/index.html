@@ -1709,6 +1709,7 @@ async function runShipment(){
         const pick = mine.filter(o => o.shippingSolution === "AMAZON_PARTNERED_CARRIER").sort((a, c) => cost(a) - cost(c))[0] || mine[0];
         if (!pick) throw new Error("Amazon didn't offer small-parcel shipping for this box.");
         sh.selections.push({shipmentId: id, transportationOptionId: pick.transportationOptionId});
+        if ((pick.preconditions || []).includes("CONFIRMED_DELIVERY_WINDOW")){ sh.needDW = sh.needDW || {}; sh.needDW[id] = true; }
         sh.carrierCost += cost(pick);
         sh.carrier = pick.shippingSolution === "AMAZON_PARTNERED_CARRIER" ? ((pick.carrier && pick.carrier.name) || "UPS") + " (Amazon rate)" : "Your own carrier";
       }
@@ -1716,8 +1717,21 @@ async function runShipment(){
     }
     if (!sh.done.confirm){
       if (!sh.approved){ shipBusy = false; renderShipSoon(); return; }   // wait for the button
-      await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/placementOptions/${sh.placementOptionId}/confirmation`));
-      await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/transportationOptions/confirmation`, {transportationSelections: sh.selections}));
+      // confirm the warehouse once (a retry must not try twice)
+      if (!sh.placementConfirmed){
+        try { await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/placementOptions/${sh.placementOptionId}/confirmation`)); }
+        catch(e){ if (!/already|has been confirmed|is confirmed/i.test(e.message)) throw e; }
+        sh.placementConfirmed = true; save();
+      }
+      // some shipping options need a delivery window picked first
+      for (const id of Object.keys(sh.needDW || {})) await confirmDeliveryWindow(sh, id);
+      try { await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/transportationOptions/confirmation`, {transportationSelections: sh.selections})); }
+      catch(e){
+        if (!/delivery window/i.test(e.message)) throw e;
+        const ids = [...String(e.message).matchAll(/shipment (sh[0-9a-f-]{30,})/g)].map(m => m[1]);
+        for (const id of (ids.length ? ids : sh.shipmentIds)) await confirmDeliveryWindow(sh, id);
+        await waitOp(await spCall("POST", `${IB}/inboundPlans/${sh.planId}/transportationOptions/confirmation`, {transportationSelections: sh.selections}));
+      }
       sh.confirmIds = [];
       for (const id of sh.shipmentIds){
         const g = await spCall("GET", `${IB}/inboundPlans/${sh.planId}/shipments/${id}`);
@@ -1750,6 +1764,19 @@ async function runShipment(){
     shipLog("Error: " + sh.error); save();
   }
   shipBusy = false; renderShipSoon();
+}
+// pick the earliest delivery window Amazon offers for a shipment and confirm it
+async function confirmDeliveryWindow(sh, id){
+  sh.dwDone = sh.dwDone || {};
+  if (sh.dwDone[id]) return;
+  const base = `${IB}/inboundPlans/${sh.planId}/shipments/${id}/deliveryWindowOptions`;
+  await waitOp(await spCall("POST", base));
+  const l = await spCall("GET", base);
+  const opts = (l.deliveryWindowOptions || []).filter(o => o.availabilityType !== "BLOCKED" && (!o.validUntil || Date.parse(o.validUntil) > Date.now()))
+    .sort((a, b) => Date.parse(a.startDate) - Date.parse(b.startDate));
+  if (!opts.length) throw new Error("Amazon didn't offer a delivery window for this shipment. Try again in a few minutes, or finish it in Send to Amazon.");
+  await waitOp(await spCall("POST", `${base}/${opts[0].deliveryWindowOptionId}/confirmation`));
+  sh.dwDone[id] = opts[0].startDate; shipLog("Delivery window " + String(opts[0].startDate).slice(0, 10)); save();
 }
 async function cancelShipment(){
   const sh = S.ship; if (!sh) return;
@@ -1852,6 +1879,7 @@ function renderShip(){
           <div><div class="v num">${money(total)}</div><span class="label">Total</span></div>
         </div>
         <div class="note" style="margin-top:6px">${esc(sh.carrier)} · ${sh.boxes || 1} box${(sh.boxes || 1) > 1 ? "es" : ""} · Amazon charges this to your seller account.</div>
+        ${/own carrier/i.test(sh.carrier || "") ? `<div class="note" style="color:var(--warn);margin-top:4px">Amazon didn't offer its UPS rate for this box, so you'd ship it yourself (buy your own label). Cancel if you'd rather try again later.</div>` : ""}
         <button class="btn go" id="shipOk" ${shipBusy ? "disabled" : ""}>${shipBusy ? '<span class="spin"></span> CONFIRMING…' : `CONFIRM · ${money(total)}`}</button>
       </div>` : ""}
     ${sh.done.labels ? `
