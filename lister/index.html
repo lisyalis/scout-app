@@ -198,7 +198,7 @@ const S = {
   batchMode: LS.get("batchMode", false),
   batch: LS.get("batch", []),
   shipFrom: LS.get("shipFrom", {name:"", address1:"", address2:"", city:"", state:"", zip:"", phone:""}),
-  box: LS.get("box", {l:12, w:10, h:8, lb:5}),
+  box: {tare: 1, ...LS.get("box", {l:12, w:10, h:8, lb:5})},
   boxPage: LS.get("boxPage", "PackageLabel_Letter_2"),
   ship: LS.get("ship", null),
   orders: LS.get("orders", {}),
@@ -517,7 +517,7 @@ async function listOne(sn){
     if (d.status === "ACCEPTED" && !errs.length){
       const entry = {at: Date.now(), sku: sn.sku, asin: sn.asin, productType: sn.productType, code: sn.code, title: sn.title,
         cond: sn.cond, channel: sn.channel, price: sn.price, cost: sn.cost, note: sn.note, rank: sn.rank, fees: sn.fees, qty: sn.qty || 1, source: sn.source || "",
-        ticket: sn.ticket, shelf: sn.shelf, warnings: (d.issues || []).map(i => i.message)};
+        ticket: sn.ticket, shelf: sn.shelf, pkgWeight: sn.pkgWeight || null, warnings: (d.issues || []).map(i => i.message)};
       S.listed.unshift(entry); rememberSource(entry.source); save(); syncSoon(); setTimeout(refreshStats, 0);
       watch(entry);
       return {ok: true, entry};
@@ -1761,6 +1761,34 @@ async function cancelShipment(){
 let shipSoon = 0;
 function renderShipSoon(){ if (tab !== "ship") return; cancelAnimationFrame(shipSoon); shipSoon = requestAnimationFrame(renderShip); }
 const shipPicked = new Set();
+// ---------- box weight, tallied book by book (like Go2Lister) ----------
+const toLb = w => !w || !(w.value > 0) ? null : /ounce|oz/i.test(w.unit) ? w.value / 16 : /kilo|kg/i.test(w.unit) ? w.value * 2.2046 : /gram/i.test(w.unit) ? w.value / 453.6 : w.value;
+const bookLb = x => toLb(x.pkgWeight);
+let weightFetching = false, boxLbTyped = false;
+// books listed before weights were saved: ask Amazon's catalog once and keep it
+async function fillWeights(rows){
+  if (weightFetching) return;
+  const need = rows.filter(x => x.pkgWeight === undefined || x.pkgWeight === null && !x.pkgWeightTried);
+  if (!need.length) return;
+  weightFetching = true;
+  for (const x of need){
+    try {
+      const d = await api("/lookup?code=" + encodeURIComponent(x.code || x.asin));
+      const m = (d.items || []).map(mapCatalog).find(y => y.asin === x.asin) || (d.items || []).map(mapCatalog)[0];
+      x.pkgWeight = (m && m.pkgWeight) || null;
+    } catch(e){ x.pkgWeight = null; }
+    x.pkgWeightTried = true; x.editedAt = Date.now();
+    await new Promise(r => setTimeout(r, 600));
+  }
+  save(); syncSoon(); weightFetching = false;
+  if (tab === "ship" && !S.ship) renderShip();
+}
+function boxTally(){
+  const picked = shipables().filter(x => shipPicked.has(x.sku));
+  let books = 0, unknown = 0;
+  for (const x of picked){ const w = bookLb(x); if (w == null) unknown += x.qty || 1; books += (w == null ? 1 : w) * (x.qty || 1); }
+  return {books: +books.toFixed(2), unknown, total: +(books + (S.box.tare || 0)).toFixed(2)};
+}
 function renderShip(){
   const m = $("#main"), sh = S.ship;
   if (!sh){
@@ -1774,7 +1802,7 @@ function renderShip(){
         <label class="item row" style="gap:10px">
           <input type="checkbox" data-pick="${esc(x.sku)}" ${shipPicked.has(x.sku) ? "checked" : ""} style="width:22px;height:22px;flex:none">
           <div style="min-width:0;flex:1"><div class="t">${esc(x.title)}</div>
-            <div class="m">${condOf(x.cond).short} · ${money(x.price)} · <span class="num">${esc(x.sku)}</span>${x.status && x.status.fnsku ? " · " + esc(x.status.fnsku) : ' · <span style="color:var(--warn)">no FNSKU yet</span>'}</div></div>
+            <div class="m">${condOf(x.cond).short} · ${money(x.price)} · <b class="num">${bookLb(x) != null ? bookLb(x).toFixed(2) + " lb" : x.pkgWeightTried ? "~1 lb?" : '<span class="spin"></span>'}</b>${(x.qty || 1) > 1 ? " ×" + x.qty : ""} · <span class="num">${esc(x.sku)}</span>${x.status && x.status.fnsku ? " · " + esc(x.status.fnsku) : ' · <span style="color:var(--warn)">no FNSKU yet</span>'}</div></div>
         </label>`).join("") || `<div class="note" style="margin-top:12px">No FBA books waiting to ship.</div>`}</div>
       ${rows.length ? `
       <h2>Box</h2>
@@ -1783,13 +1811,22 @@ function renderShip(){
         <label class="field">Width (in)<input id="bW" class="num" inputmode="decimal" value="${S.box.w}"></label>
         <label class="field">Height (in)<input id="bH" class="num" inputmode="decimal" value="${S.box.h}"></label>
       </div>
-      <div class="grid2"><label class="field">Weight (lb, packed)<input id="bLb" class="num" inputmode="decimal" value="${S.box.lb}"></label><div></div></div>
+      ${(() => { const t = boxTally(); if (!boxLbTyped) S.box.lb = t.total; return `
+      <div class="grid2">
+        <label class="field">Weight (lb, packed)<input id="bLb" class="num" inputmode="decimal" value="${S.box.lb}"></label>
+        <label class="field">Empty box + packing (lb)<input id="bTare" class="num" inputmode="decimal" value="${S.box.tare}"></label>
+      </div>
+      <div class="note" style="margin-top:6px">${boxLbTyped ? `You typed the weight. <a href="#" id="bAuto" style="color:var(--blue)">Use tally ${t.total} lb</a>` : `Tally: books ${t.books} lb + box ${S.box.tare} lb = <b>${t.total} lb</b>`}${t.unknown ? ` · ${t.unknown} book${t.unknown > 1 ? "s" : ""} counted as 1 lb (no Amazon weight)` : ""}. Weigh the box if you can and type it in.</div>`; })()}
       <div class="note" style="margin-top:6px">Ships from: ${S.shipFrom.address1 ? esc(`${S.shipFrom.name}, ${S.shipFrom.address1}, ${S.shipFrom.city} ${S.shipFrom.state}`) : '<span class="neg">add your address in Settings</span>'}</div>
       <button class="btn go" id="shipGo" ${shipPicked.size ? "" : "disabled"}>CREATE SHIPMENT · ${shipPicked.size} BOOK${shipPicked.size === 1 ? "" : "S"}</button>
       <div class="note" style="margin-top:6px">Nothing is charged until you tap Confirm on the quote.</div>` : ""}`;
     document.querySelectorAll("[data-pick]").forEach(c => c.onchange = () => { c.checked ? shipPicked.add(c.dataset.pick) : shipPicked.delete(c.dataset.pick); renderShip(); });
     const num = (id, k) => { const el = $(id); if (el) el.onchange = e => { const v = parseFloat(e.target.value); if (v > 0){ S.box = {...S.box, [k]: v}; save(); } }; };
-    num("#bL", "l"); num("#bW", "w"); num("#bH", "h"); num("#bLb", "lb");
+    num("#bL", "l"); num("#bW", "w"); num("#bH", "h");
+    if ($("#bLb")) $("#bLb").onchange = e => { const v = parseFloat(e.target.value); if (v > 0){ S.box = {...S.box, lb: v}; boxLbTyped = Math.abs(v - boxTally().total) > 0.01; save(); renderShip(); } };
+    if ($("#bTare")) $("#bTare").onchange = e => { const v = parseFloat(e.target.value); if (v >= 0){ S.box = {...S.box, tare: v}; save(); renderShip(); } };
+    if ($("#bAuto")) $("#bAuto").onclick = e => { e.preventDefault(); boxLbTyped = false; renderShip(); };
+    fillWeights(rows);
     if ($("#shipGo")) $("#shipGo").onclick = () => startShipment([...shipPicked]);
     return;
   }
